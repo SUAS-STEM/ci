@@ -32,6 +32,7 @@ jobs:
     timeout-minutes: 35
     permissions:
       contents: write  # ONLY the public transfer draft, never private repos
+      id-token: write  # Short-lived GitHub-signed ephemeral recipient identity
     steps:
       - name: Checkout reviewed public-only transport implementation
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683

@@ -15,7 +15,10 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
+from urllib.parse import quote, urlsplit
+from urllib.request import Request, urlopen
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +29,44 @@ MARKER = re.compile(r"ci-opaque-[0-9a-f]{24}\Z")
 RECIPIENT = re.compile(r"age1[023456789acdefghjklmnpqrstuvwxyz]{58}\Z")
 MAX_PACKET = 25 * 1024 * 1024
 MAX_SOURCE = 60 * 1024 * 1024
+MAX_LOG = 64 * 1024 * 1024
+
+
+def oidc_audience(nonce, private_sha, private_recipient, worker_recipient):
+    """Must match the independently validated PRIVATE coordinator encoding."""
+    if (not re.fullmatch(r"[0-9a-f]{24}", nonce)
+            or not re.fullmatch(r"[0-9a-f]{40}", private_sha)
+            or RECIPIENT.fullmatch(private_recipient) is None
+            or RECIPIENT.fullmatch(worker_recipient) is None):
+        raise ValueError("Invalid OIDC audience input")
+    fields = ("ci-opaque-v1", nonce, private_sha,
+              private_recipient, worker_recipient)
+    return "ci-opaque-v1:" + hashlib.sha256(
+        "\x00".join(fields).encode("ascii")).hexdigest()
+
+
+def github_runner_oidc(audience):
+    """Obtain GitHub-signed runner OIDC proof without exposing bearer token."""
+    endpoint = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+    bearer = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+    parsed = urlsplit(endpoint)
+    if (not endpoint.startswith("https://") or not bearer
+            or parsed.hostname is None
+            or not parsed.hostname.endswith(".actions.githubusercontent.com")
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port not in (None, 443)
+            or parsed.fragment or len(endpoint) > 2048):
+        raise RuntimeError("GitHub Actions OIDC issuer unavailable")
+    separator = "&" if "?" in endpoint else "?"
+    address = endpoint + separator + "audience=" + quote(audience, safe="")
+    with urlopen(Request(address, headers={"Authorization": "Bearer " + bearer}),
+                 timeout=20) as response:
+        result = json.load(response)
+    proof = result.get("value") if isinstance(result, dict) else None
+    if (not isinstance(proof, str) or len(proof) > 16000
+            or not re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", proof)):
+        raise RuntimeError("Missing or malformed runner identity proof")
+    return proof
 
 
 def gh(*args):
@@ -77,18 +118,91 @@ def unpack_into(files, work):
         dest.write_bytes(content)
 
 
+def capture_private_build(work, env, *, command=None, timeout=1200):
+    """Capture exact combined MSVC output privately, including timeouts.
+
+    Spool to a private file instead of an unlimited subprocess.PIPE, which
+    risks OOM when a compiler unexpectedly prints large diagnostic output.
+    The caller encrypts these unchanged bytes before any public upload.
+    """
+    log = work / "msvc-private-output.bin"
+    if log.exists() or log.is_symlink():
+        raise RuntimeError("Private diagnostic output path is not clean")
+    command = command or ["pwsh", "-NoLogo", "-NoProfile",
+                          "-NonInteractive", "-File", str(work / "build.ps1")]
+    descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as output:
+        try:
+            result = subprocess.run(command, cwd=work, env=env,
+                                    stdout=output, stderr=subprocess.STDOUT,
+                                    timeout=timeout, check=False)
+            returncode = result.returncode
+        except subprocess.TimeoutExpired:
+            # subprocess.run kills/reaps its child when the timeout expires.
+            # Retain any captured compiler diagnostics with a failing status.
+            returncode = 124
+    size = log.stat().st_size
+    if size > MAX_LOG:
+        raise RuntimeError("Encrypted build log exceeds size limit")
+    return returncode, log.read_bytes()
+
+
+def trusted_source_asset(release, tag):
+    """Require the right encrypted prerelease and published source digest."""
+    if (release.get("tag_name") != tag or release.get("draft") is not False
+            or release.get("prerelease") is not True
+            or release.get("body", "").strip() not in (
+                "Short-lived encrypted synthetic build transfer; no plaintext source.",
+                "Short-lived encrypted synthetic MSVC test; no plaintext inputs.")):
+        raise ValueError("Untrusted encrypted transfer Release")
+    found = [item for item in release.get("assets", [])
+             if item.get("name") == "source.age"]
+    if not found:
+        return None
+    if len(found) != 1:
+        raise ValueError("Duplicate encrypted source upload")
+    item = found[0]
+    if (item.get("state") != "uploaded" or type(item.get("size")) is not int
+            or not 0 < item["size"] < MAX_PACKET
+            or not isinstance(item.get("digest"), str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", item["digest"]) is None):
+        raise ValueError("Invalid encrypted source upload digest or size")
+    return item
+
+
+def receive_encrypted_source(tag, work, *, retries=150):
+    """Download source into a fresh staging directory; never accept partials."""
+    destination = work / "source.age"
+    if destination.exists() or destination.is_symlink():
+        raise RuntimeError("Encrypted input was already present")
+    for _ in range(retries):
+        release = json.loads(gh("api", f"repos/{PUBLIC_REPO}/releases/tags/{tag}"))
+        item = trusted_source_asset(release, tag)
+        if item is not None:
+            with tempfile.TemporaryDirectory(prefix=".cipher-in-", dir=work) as temp:
+                staged = Path(temp) / "source.age"
+                try:
+                    gh("release", "download", tag, "--repo", PUBLIC_REPO,
+                       "--pattern", "source.age", "--dir", str(temp))
+                except subprocess.CalledProcessError:
+                    time.sleep(4)
+                    continue
+                if (staged.is_symlink() or not staged.is_file()
+                        or staged.stat().st_size != item["size"]):
+                    raise ValueError("Incomplete encrypted source download")
+                with staged.open("rb") as handle:
+                    digest = "sha256:" + hashlib.file_digest(handle, "sha256").hexdigest()
+                if digest != item["digest"]:
+                    raise ValueError("Encrypted source does not match GitHub asset digest")
+                staged.replace(destination)
+                return destination
+        time.sleep(4)
+    raise TimeoutError("Encrypted build input was not received")
+
+
 def _install_and_build(nonce, source_commit, recipient, keyfile, work):
     tag = "ci-opaque-" + nonce
-    incoming = work / "source.age"
-    for _ in range(150):
-        try:
-            gh("release", "download", tag, "--repo", PUBLIC_REPO,
-               "--pattern", "source.age", "--dir", str(work))
-            break
-        except subprocess.CalledProcessError:
-            time.sleep(4)
-    if not incoming.is_file() or incoming.stat().st_size > MAX_PACKET:
-        raise RuntimeError("Encrypted build input was not received")
+    incoming = receive_encrypted_source(tag, work)
     decrypted = subprocess.run(
         [str(AGE), "-d", "-i", str(keyfile), str(incoming)],
         check=True, capture_output=True, timeout=30,
@@ -101,28 +215,22 @@ def _install_and_build(nonce, source_commit, recipient, keyfile, work):
                 "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_RUNTIME_URL"):
         env.pop(key, None)
     env["CI"] = "true"
-    proc = subprocess.run(
-        ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(work / "build.ps1")],
-        cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        timeout=1200,
-    )
-    if len(proc.stdout) > 64 * 1024 * 1024:
-        raise RuntimeError("Encrypted build log exceeds size limit")
-    # Preserve the exact combined output byte stream, including errors.
-    log = proc.stdout
+    # Preserve exactly what the PowerShell process emitted, including errors.
+    # Errors and timeouts still return an encrypted log and status file.
+    returncode, log = capture_private_build(work, env)
     encrypted = subprocess.run([str(AGE), "-r", recipient],
                                input=log, capture_output=True,
                                check=True, timeout=30).stdout
     (work / "result-log.age").write_bytes(encrypted)
     status = json.dumps({"nonce": nonce, "source_commit": source_commit,
-                         "exit_code": proc.returncode,
+                         "exit_code": returncode,
                          "log_sha256": hashlib.sha256(log).hexdigest()},
                         sort_keys=True).encode("ascii")
     (work / "result-status.age").write_bytes(
         subprocess.run([str(AGE), "-r", recipient], input=status,
                        capture_output=True, check=True, timeout=30).stdout)
     output = work / "ci-out" / "program.exe"
-    if proc.returncode == 0:
+    if returncode == 0:
         if (not output.is_file() or output.is_symlink()
                 or not 1024 < output.stat().st_size < 100 * 1024 * 1024
                 or not output.read_bytes().startswith(b"MZ")):
@@ -132,7 +240,7 @@ def _install_and_build(nonce, source_commit, recipient, keyfile, work):
         ciphertext = subprocess.run([str(AGE), "-r", recipient], input=binary,
                                     capture_output=True, check=True, timeout=50).stdout
         (work / "result-exe.age").write_bytes(ciphertext)
-    return proc.returncode
+    return returncode
 
 
 def main():
@@ -157,9 +265,13 @@ def main():
     print("Opaque bootstrap: recipient syntax verified", flush=True)
     pub = runner / "recipient.agepub"
     pub.write_text(match.group() + "\n", encoding="ascii")
+    audience = oidc_audience(nonce, sha, recipient, match.group())
+    attestation = runner / "recipient.oidc"
+    attestation.write_text(github_runner_oidc(audience) + "\n", encoding="ascii")
     tag = "ci-opaque-" + nonce
-    gh("release", "upload", tag, "--repo", PUBLIC_REPO, str(pub))
-    print("One-time public encryption recipient advertised; awaiting encrypted input", flush=True)
+    gh("release", "upload", tag, "--repo", PUBLIC_REPO,
+       str(pub), str(attestation))
+    print("GitHub-signed one-time public encryption recipient advertised", flush=True)
     build_rc = _install_and_build(nonce, sha, recipient, identity, runner)
     uploads = [str(runner / "result-log.age"), str(runner / "result-status.age")]
     if build_rc == 0:

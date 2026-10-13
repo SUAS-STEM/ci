@@ -30,6 +30,11 @@ workflow code are not excluded from the trust boundary.
 
 The private coordinator generates an ephemeral age recipient for results;
 the Windows worker generates a different ephemeral age keypair for inputs.
+The Windows job must have `id-token:write` permission and publishes a GitHub
+OIDC-signed JWT attesting its one-time input recipient. The private coordinator
+checks GitHub's signing keys, run/repository identity and a custom audience
+hash binding the nonce, private commit and both ephemeral recipients **before
+source upload**. Unsigned or substituted public Release recipients are refused.
 Only public recipients and authenticated age ciphertext are transported in
 short-lived PUBLIC prerelease assets. The **verbatim combined** compiler
 stdout/stderr bytes and exit-code/log-hash status are encrypted separately.

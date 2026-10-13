@@ -38,6 +38,13 @@ The above run was a **one-time feature-branch proof**. Its temporary push-trigge
 coordinator dispatches this PUBLIC repository's Windows/MSVC runner to compile
 an encrypted source bundle and private PowerShell build script. The worker
 generates a one-time age keypair and publishes only its PUBLIC recipient;
+the public worker also requests a short-lived GitHub-signed OIDC token whose
+audience binds the one-time encryption recipients, nonce and private commit.
+Before encrypting any private source, the coordinator verifies the real JWT
+signature, issuer, exact public workflow/run/commit and token freshness. This
+prevents an attacker with access to the temporary Release from simply
+substituting their own recipient key. The public runner and its operators
+remain inside the trust boundary.
 the coordinator encrypts the source and `.ps1` to that recipient inside a
 short-lived PUBLIC prerelease containing only ciphertext. The Windows runner
 decrypts and compiles inside its temporary workspace, captures **the unchanged
