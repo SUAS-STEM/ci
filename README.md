@@ -51,6 +51,16 @@ decrypts and compiles inside its temporary workspace, captures **the unchanged
 combined compiler stdout/stderr byte stream**, and returns that log, a
 separately authenticated status/hash, and the compiled `.exe`, all encrypted
 to a separate one-time PRIVATE-side recipient. The private coordinator
+now also requires a **second GitHub-signed OIDC proof** bound to the exact
+return-log digest, executable digest, and Windows process exit code. Public
+Release asset substitution cannot fabricate a correctly signed result without
+control of the approved GitHub workflow execution. Compiler output is spooled
+to a private temporary file with a size cap, including diagnostics on timeouts;
+encrypted input downloads are checked against the GitHub asset digest before
+being accepted. These extra result-signing and bounded-output checks were
+added after the initial successful synthetic MSVC run and require their own
+live full-build verification.
+The private coordinator
 validates and decrypts the results, publishes the actual binary, private
 build log, checksum, and provenance into a PRIVATE Release, and deletes the
 temporary PUBLIC ciphertext prerelease. **Zero Actions artifacts are used.**

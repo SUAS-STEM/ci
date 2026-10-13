@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from tools.opaque_runner import (read_packet, RECIPIENT, MARKER,
                                  capture_private_build, oidc_audience,
+                                 oidc_result_audience,
                                  github_runner_oidc, trusted_source_asset,
                                  receive_encrypted_source)
 
@@ -71,6 +72,24 @@ class OpaquePacketTests(unittest.TestCase):
                      (self.NONCE, self.SHA, "age1" + "x" * 58, b),
                      (self.NONCE, self.SHA, a, "age1" + "z" * 58)):
             self.assertNotEqual(oidc_audience(*case), original)
+
+    def test_oidc_result_audience_binds_log_executable_and_exit(self):
+        a, b = "age1" + "q" * 58, "age1" + "p" * 58
+        status = {"nonce": self.NONCE, "source_commit": self.SHA,
+                  "exit_code": 0, "log_sha256": "c" * 64,
+                  "binary_sha256": "d" * 64}
+        original = oidc_result_audience(self.NONCE, self.SHA, a, b, status)
+        self.assertRegex(original, r"^ci-opaque-result-v1:[0-9a-f]{64}$")
+        for key, changed in (("log_sha256", "e" * 64),
+                             ("binary_sha256", "f" * 64),
+                             ("exit_code", 1)):
+            modified = dict(status, **{key: changed})
+            self.assertNotEqual(original,
+                                oidc_result_audience(self.NONCE, self.SHA,
+                                                     a, b, modified))
+        with self.assertRaises(ValueError):
+            oidc_result_audience(self.NONCE, self.SHA, a, b,
+                                 dict(status, binary_sha256="INVALID"))
 
     def test_oidc_request_uses_github_endpoint(self):
         import tools.opaque_runner as module

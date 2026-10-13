@@ -45,6 +45,28 @@ def oidc_audience(nonce, private_sha, private_recipient, worker_recipient):
         "\x00".join(fields).encode("ascii")).hexdigest()
 
 
+def oidc_result_audience(nonce, private_sha, private_recipient,
+                         worker_recipient, status):
+    """GitHub-sign exact MSVC result hashes and exit status for this run."""
+    # Validate all recipient/commit/nonce fields with the same input proof.
+    oidc_audience(nonce, private_sha, private_recipient, worker_recipient)
+    if (not isinstance(status, dict)
+            or status.get("nonce") != nonce
+            or status.get("source_commit") != private_sha
+            or type(status.get("exit_code")) is not int
+            or not -(2**31) <= status["exit_code"] <= 2**32 - 1
+            or not isinstance(status.get("log_sha256"), str)
+            or re.fullmatch(r"[a-f0-9]{64}", status["log_sha256"]) is None
+            or not isinstance(status.get("binary_sha256"), str)
+            or re.fullmatch(r"[a-f0-9]{64}", status["binary_sha256"]) is None):
+        raise ValueError("Invalid authenticated MSVC result status")
+    fields = ("ci-opaque-result-v1", nonce, private_sha, private_recipient,
+              worker_recipient, str(status["exit_code"]),
+              status["log_sha256"], status["binary_sha256"])
+    return "ci-opaque-result-v1:" + hashlib.sha256(
+        "\x00".join(fields).encode("ascii")).hexdigest()
+
+
 def github_runner_oidc(audience):
     """Obtain GitHub-signed runner OIDC proof without exposing bearer token."""
     endpoint = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", "")
@@ -222,13 +244,7 @@ def _install_and_build(nonce, source_commit, recipient, keyfile, work):
                                input=log, capture_output=True,
                                check=True, timeout=30).stdout
     (work / "result-log.age").write_bytes(encrypted)
-    status = json.dumps({"nonce": nonce, "source_commit": source_commit,
-                         "exit_code": returncode,
-                         "log_sha256": hashlib.sha256(log).hexdigest()},
-                        sort_keys=True).encode("ascii")
-    (work / "result-status.age").write_bytes(
-        subprocess.run([str(AGE), "-r", recipient], input=status,
-                       capture_output=True, check=True, timeout=30).stdout)
+    binary_digest = "0" * 64
     output = work / "ci-out" / "program.exe"
     if returncode == 0:
         if (not output.is_file() or output.is_symlink()
@@ -237,10 +253,19 @@ def _install_and_build(nonce, source_commit, recipient, keyfile, work):
             raise RuntimeError("Expected compiled Windows executable missing")
         with output.open("rb") as source:
             binary = source.read()
+        binary_digest = hashlib.sha256(binary).hexdigest()
         ciphertext = subprocess.run([str(AGE), "-r", recipient], input=binary,
                                     capture_output=True, check=True, timeout=50).stdout
         (work / "result-exe.age").write_bytes(ciphertext)
-    return returncode
+    status = {"nonce": nonce, "source_commit": source_commit,
+              "exit_code": returncode,
+              "log_sha256": hashlib.sha256(log).hexdigest(),
+              "binary_sha256": binary_digest}
+    (work / "result-status.age").write_bytes(
+        subprocess.run([str(AGE), "-r", recipient],
+                       input=json.dumps(status, sort_keys=True).encode("ascii"),
+                       capture_output=True, check=True, timeout=30).stdout)
+    return returncode, status
 
 
 def main():
@@ -272,8 +297,14 @@ def main():
     gh("release", "upload", tag, "--repo", PUBLIC_REPO,
        str(pub), str(attestation))
     print("GitHub-signed one-time public encryption recipient advertised", flush=True)
-    build_rc = _install_and_build(nonce, sha, recipient, identity, runner)
-    uploads = [str(runner / "result-log.age"), str(runner / "result-status.age")]
+    build_rc, status = _install_and_build(nonce, sha, recipient, identity, runner)
+    # This second independently signed proof authenticates the returned MSVC
+    # log and executable hashes, not merely the initial public input key.
+    result_proof = runner / "result.oidc"
+    result_proof.write_text(github_runner_oidc(oidc_result_audience(
+        nonce, sha, recipient, match.group(), status)) + "\n", encoding="ascii")
+    uploads = [str(runner / "result-log.age"), str(runner / "result-status.age"),
+               str(result_proof)]
     if build_rc == 0:
         uploads.append(str(runner / "result-exe.age"))
     gh("release", "upload", tag, "--repo", PUBLIC_REPO, *uploads)

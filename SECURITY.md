@@ -38,6 +38,12 @@ source upload**. Unsigned or substituted public Release recipients are refused.
 Only public recipients and authenticated age ciphertext are transported in
 short-lived PUBLIC prerelease assets. The **verbatim combined** compiler
 stdout/stderr bytes and exit-code/log-hash status are encrypted separately.
+An additional OIDC JWT signed by GitHub binds the exact raw compiler-log hash,
+compiled executable hash, and process exit code to the same approved runner,
+workflow revision, source commit, and one-time keys. The private coordinator
+rejects mismatched JWTs before printing diagnostics or publishing outputs.
+This additional result-signing step has local failure-path tests but is not
+part of the earlier successful full Windows build #38478171900.
 The successful synthetic proof is public Actions run #38478171900; the
 resulting binary/log exist only in private Release `opaque-ci-38478171900`.
 
