@@ -1,0 +1,57 @@
+name: Encrypted MSVC build relay (experimental)
+run-name: opaque-${{ inputs.nonce }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      nonce:
+        description: Public random identifier; never a source path
+        required: true
+        type: string
+      source_commit:
+        description: Private commit digest only
+        required: true
+        type: string
+      output_recipient:
+        description: Private coordinator's one-time PUBLIC age recipient
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opaque-${{ inputs.nonce }}
+  cancel-in-progress: false
+
+jobs:
+  encrypted-msvc:
+    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/main' && github.actor == 'eschan145' && github.event_name == 'workflow_dispatch'
+    name: opaque-windows-msvc
+    runs-on: windows-2025
+    timeout-minutes: 35
+    permissions:
+      contents: write  # ONLY the public transfer draft, never private repos
+    steps:
+      - name: Checkout reviewed public-only transport implementation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify public-only workflow/source allowlist
+        shell: pwsh
+        run: python -m tools.public_guard --tree-only
+      - name: Install pinned and checksum-verified age
+        shell: pwsh
+        run: python tools/install_age.py
+      - name: Decrypt in runner and execute encrypted PowerShell build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_NONCE: ${{ inputs.nonce }}
+          CI_PRIVATE_SHA: ${{ inputs.source_commit }}
+          CI_OUTPUT_RECIPIENT: ${{ inputs.output_recipient }}
+        run: python -m tools.opaque_runner
+      # Source, build.ps1, binaries, and captured diagnostics are transferred
+      # as encrypted files inside a temporary PUBLIC DRAFT GitHub Release.
+      # This workflow never uploads Actions artifacts, and it never receives
+      # credentials for the private source repository or private Release.
