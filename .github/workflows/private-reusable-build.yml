@@ -1,0 +1,222 @@
+# PUBLIC reusable workflow DEFINITION, but executions belong to the PRIVATE caller.
+# Never dispatch this from a public repo. GitHub bills the caller's Actions.
+name: Private caller CI (CMake, direct private Release)
+
+on:
+  workflow_call:
+    inputs:
+      linux_binary:
+        description: Relative path to the compiled Linux executable
+        required: false
+        type: string
+        default: build/synthetic_adder
+      windows_binary:
+        description: Relative path to the compiled Windows executable
+        required: false
+        type: string
+        default: build/Release/synthetic_adder.exe
+      linux_runner:
+        description: Linux runner label; use a trusted self-hosted label when available
+        required: false
+        type: string
+        default: ubuntu-24.04
+      windows_runner:
+        description: Windows runner label; use a trusted self-hosted label when available
+        required: false
+        type: string
+        default: windows-2025
+      release_repository:
+        description: Private release repo; empty publishes to private caller repo
+        required: false
+        type: string
+        default: ""
+      run_tests:
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      vault_release_token:
+        description: Required only for publishing to another private repository; scope contents:write ONLY there
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    # Execution context, GITHUB_TOKEN, logs, billing and source checkout
+    # belong to the PRIVATE CALLER repository, never this public template repo.
+    if: ${{ github.event.repository.private == true && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.repository != 'SUAS-STEM/ci-relay-lab' }}
+    runs-on: ${{ inputs.linux_runner }}
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.name.outputs.tag }}
+      repo: ${{ steps.name.outputs.repo }}
+    steps:
+      - name: Create draft in PRIVATE repository
+        id: name
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.vault_release_token || github.token }}
+          VAULT_TOKEN: ${{ secrets.vault_release_token }}
+          DESTINATION: ${{ inputs.release_repository }}
+        run: |
+          set -euo pipefail
+          REPO="${DESTINATION:-$GITHUB_REPOSITORY}"
+          if [[ ! "$REPO" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
+            echo "::error::Invalid destination repository"; exit 1
+          fi
+          if [[ "$(gh api "repos/$REPO" --jq .private)" != "true" ]]; then
+            echo "::error::Refusing public or inaccessible release destination"; exit 1
+          fi
+          if [[ "$REPO" != "$GITHUB_REPOSITORY" && -z "$VAULT_TOKEN" ]]; then
+            echo "::error::External vault requires dedicated vault_release_token"; exit 1
+          fi
+          TAG="private-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          TARGET="$GITHUB_SHA"
+          if [[ "$REPO" != "$GITHUB_REPOSITORY" ]]; then
+            TARGET="main"
+          fi
+          gh release create "$TAG" --repo "$REPO" --target "$TARGET" \
+            --draft --latest=false --title "Private CI $GITHUB_RUN_ID" \
+            --notes "PRIVATE_CALLER=$GITHUB_REPOSITORY
+          SOURCE_SHA=$GITHUB_SHA
+          RUN=$GITHUB_RUN_ID
+          ATTEMPT=$GITHUB_RUN_ATTEMPT
+          REUSABLE_WORKFLOW=SUAS-STEM/ci-relay-lab/.github/workflows/private-reusable-build.yml"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ${{ inputs.linux_runner }}
+            binary: ${{ inputs.linux_binary }}
+            asset: linux-x86_64-program
+          - os: ${{ inputs.windows_runner }}
+            binary: ${{ inputs.windows_binary }}
+            asset: windows-x86_64-program.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout caller's PRIVATE code only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build PRIVATE code (outputs remain in caller-private logs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --parallel 2
+      - name: Test PRIVATE code
+        if: ${{ inputs.run_tests }}
+        shell: bash
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Stage real executable and SHA-256 sidecar (no Actions artifacts)
+        shell: bash
+        env:
+          BINARY: ${{ matrix.binary }}
+          ASSET: ${{ matrix.asset }}
+          EXPECTED_OS: ${{ runner.os }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,os,pathlib,shutil
+          path=pathlib.Path(os.environ["BINARY"])
+          if (path.is_absolute() or ".." in path.parts or path.is_symlink()
+                  or not path.is_file() or not 1024 < path.stat().st_size < 256*1024*1024):
+              raise SystemExit("Invalid configured executable; refusing upload")
+          data=path.read_bytes()
+          expected=b"MZ" if os.environ["EXPECTED_OS"] == "Windows" else b"\x7fELF"
+          if not data.startswith(expected):
+              raise SystemExit("Unexpected executable format")
+          name=os.environ["ASSET"]
+          out=pathlib.Path("release-files")
+          out.mkdir(exist_ok=True)
+          dest=out/name
+          shutil.copyfile(path,dest)
+          (out/(name+".sha256")).write_text(hashlib.sha256(data).hexdigest()+"  "+name+"\n")
+          PY
+      - name: Upload directly to PRIVATE draft Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.vault_release_token || github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          REPO: ${{ needs.prepare.outputs.repo }}
+          ASSET: ${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" --repo "$REPO" \
+            "release-files/$ASSET" "release-files/$ASSET.sha256"
+
+  publish:
+    needs: [prepare, build]
+    if: ${{ always() && needs.prepare.result == 'success' }}
+    runs-on: ${{ inputs.linux_runner }}
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Validate complete release before publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.vault_release_token || github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          REPO: ${{ needs.prepare.outputs.repo }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$BUILD_RESULT" != "success" ]]; then
+            # A failed platform must never leave a downloadable published build.
+            # Delete ONLY this run's exact draft with the expected provenance.
+            BODY="$(gh release view "$TAG" --repo "$REPO" --json body --jq .body)"
+            EXPECTED="$(printf 'PRIVATE_CALLER=%s\nSOURCE_SHA=%s\nRUN=%s\nATTEMPT=%s\nREUSABLE_WORKFLOW=SUAS-STEM/ci-relay-lab/.github/workflows/private-reusable-build.yml' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT")"
+            DRAFT="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft)"
+            if [[ "$BODY" != "$EXPECTED" || "$DRAFT" != "true" ]]; then
+              echo "::error::Incomplete release ownership mismatch; refusing deletion"; exit 1
+            fi
+            gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes
+            echo "::error::At least one build failed; incomplete draft removed."
+            exit 1
+          fi
+          mkdir -p verified
+          gh release download "$TAG" --repo "$REPO" --dir verified
+          python - <<'PY'
+          import hashlib,pathlib,re
+          root=pathlib.Path("verified")
+          names=("linux-x86_64-program","windows-x86_64-program.exe")
+          expected=set(names)|{n+".sha256" for n in names}
+          if {p.name for p in root.iterdir()}!=expected:
+              raise SystemExit("Missing or unexpected release assets")
+          for name in names:
+              source=root/name
+              digest=root/(name+".sha256")
+              if (not source.is_file() or source.is_symlink() or
+                      not digest.is_file() or digest.is_symlink() or
+                      not 1024<source.stat().st_size<256*1024*1024 or
+                      digest.stat().st_size>256):
+                  raise SystemExit("Invalid or oversized release assets")
+              data=source.read_bytes()
+              if not data.startswith(b"MZ" if name.endswith(".exe") else b"\x7fELF"):
+                  raise SystemExit("Unexpected executable format")
+              actual=hashlib.sha256(data).hexdigest()
+              if digest.read_text("ascii")!=f"{actual}  {name}\n":
+                  raise SystemExit("Release checksum mismatch")
+          print("Verified both private Windows/Linux executables")
+          PY
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest=false
+          if [[ "$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft)" != "false" ]]; then
+            echo "::error::Release publication unconfirmed"; exit 1
+          fi

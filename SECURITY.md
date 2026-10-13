@@ -29,6 +29,25 @@ The public runner does **not** upload Actions artifacts; the private Release is 
 
 ## Source and release review
 
+## Public reusable workflow definitions invoked by private callers
+
+`.github/workflows/private-reusable-build.yml` is intentionally **public
+source code for CI configuration**, not a public hosted job for private
+projects. GitHub evaluates the called workflow inside the PRIVATE caller's
+execution context. The reusable workflow refuses execution unless the caller
+repository is private and the event is on its default branch, and it never
+checks out a public build-fixture repo. Callers should pin a reviewed full
+commit SHA and configure branch protection on the private source repo.
+
+For external private release destinations, a dedicated narrow publisher
+credential is required; the workflow never inherits arbitrary secrets and
+never uses `actions/upload-artifact`. The separate caller's private logs can
+still contain sensitive compiler diagnostics, so use branch protections and
+runner access controls. No cryptographic source secrecy from GitHub-hosted
+runner administrators or privileged self-hosted users is claimed. The private
+caller also pays for the runner execution, regardless of the reusable
+definition being publicly hosted.
+
 The approved public CI workflow is manual, `main`-only, and restricted to the approved actor. The repository's protected `main` requires an independent reviewer and the `public-source-gate` check. The one-off temporary integration workflow used during the live proof has been removed; do not re-enable it.
 
 The previous artifact-ZIP upload and signer job were **retired** in favor of ciphertext-in-job-log transport plus Pi-controlled private Releases. Do not assume Sigstore attestations from the retired workflow apply to the new mechanism. Separate signed provenance remains future work.

@@ -15,6 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_FILES = frozenset({
     ".github/workflows/fixture.yml",
+    ".github/workflows/private-reusable-build.yml",
     ".github/workflows/security-review.yml",
     ".gitignore",
     "CMakeLists.txt",
@@ -36,6 +37,7 @@ ALLOWED_FILES = frozenset({
     "tools/pi_public_release.py",
     "tools/private_release_publish.py",
     "tests/test_private_release_publish.py",
+    "tests/test_private_reusable_workflow.py",
 })
 
 # Known benign toy program; no private source or arbitrary repositories.

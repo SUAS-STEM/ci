@@ -32,6 +32,59 @@ The above run was a **one-time feature-branch proof**. Its temporary push-trigge
 
 ## Security boundaries and limitations
 
+### Drop-in private-source build workflow (separate from this public test)
+
+A **private** repository can call the *publicly readable workflow definition*
+`.github/workflows/private-reusable-build.yml` using GitHub reusable workflows.
+**Crucially, the jobs then execute in the PRIVATE caller's Actions context**:
+the caller's private checkout, job logs, runner billing, and `GITHUB_TOKEN`.
+The public `ci-relay-lab` workflow does not receive the caller's source or
+logs. This does **not** provide public-repository/free-runner billing for
+confidential source; attempts to transfer plaintext private builds into the
+public test repo are not supported.
+
+For a private CMake project, add a single caller workflow file, for example:
+
+```yaml
+name: Private compiled releases
+on:
+  workflow_dispatch:
+  # Once private Actions billing/runner access is ready, optionally add:
+  # push:
+  #   branches: [main]
+  #   paths: ['**/*.cpp', '**/*.h', '**/*.hpp', 'CMakeLists.txt', 'cmake/**', '.github/workflows/private-ci.yml']
+permissions:
+  contents: write
+jobs:
+  build:
+    uses: SUAS-STEM/ci-relay-lab/.github/workflows/private-reusable-build.yml@REVIEWED_IMMUTABLE_COMMIT_SHA
+    with:
+      linux_binary: build/myprogram
+      windows_binary: build/Release/myprogram.exe
+```
+
+Replace `REVIEWED_IMMUTABLE_COMMIT_SHA` with the reviewed workflow's **full
+40-character commit SHA**, not a mutable branch or tag. Adjust the two binary
+paths to match your CMake targets. Default publication is **directly into a
+GitHub Release on that same private caller repo**, with no additional secrets
+or Actions artifact uploads. Set `release_repository` to a different PRIVATE
+repository (e.g. `SUAS-STEM/ci-release-vault`) only when you also explicitly
+pass `vault_release_token` using a GitHub App or fine-grained, **vault-only**
+`contents:write` credential. Never use a broad personal token in runners.
+
+The reusable workflow also accepts `linux_runner` / `windows_runner` inputs
+for approved trusted self-hosted runners. No such runner is registered for the
+isolated sample today. The separate private sample repository
+`SUAS-STEM/ci-private-build-lab` demonstrates the caller without touching GCS.
+
+**Status:** This private-caller workflow is a staging integration with static
+security checks and local build checks; it has **not** passed a hosted private
+Actions run. GitHub's private-repository runner billing currently blocks jobs.
+Do not represent a publicly defined workflow as a confidential-computing
+enclave: hosted/private or self-hosted runners can see source plaintext while
+compiling. Strict source confidentiality requires a runner you trust, protected
+private workflows, narrow credentials, and appropriate network controls.
+
 - **This is not a mechanism to compile proprietary GCS source in public Actions.** Encrypting output or encrypting a source archive cannot keep the source secret from a runner that executes it. Public runners see this repository's harmless pinned C++ toy source only. Private GCS needs a trusted private build environment.
 - The one-time age *private* key stays on the Pi in anonymous memory. If the Pi crashes before fetching/decrypting, the job must be rerun with a fresh key; it is not recoverable from GitHub.
 - A public ciphertext record can be seen by anybody with access to the public workflow logs. The one-time secret key remains private to the Pi. Once plaintext executables are published in a **private** Release, any authorized member of that private repo can download them.
