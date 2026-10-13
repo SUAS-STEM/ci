@@ -20,5 +20,7 @@ jobs:
           persist-credentials: false
       - name: Reject unexpected source files and changed toy source
         run: python3 -m tools.public_guard --tree-only
+      - name: Install checksum-verified age for one-time key regression tests
+        run: python3 tools/install_age.py
       - name: Regression tests for security guard
         run: python3 -m unittest discover -s tests -v
