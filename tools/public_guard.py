@@ -16,7 +16,6 @@ ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_FILES = frozenset({
     ".github/workflows/fixture.yml",
     ".github/workflows/security-review.yml",
-    ".github/workflows/signature-probe.yml",
     ".gitignore",
     "CMakeLists.txt",
     "README.md",
