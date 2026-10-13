@@ -36,6 +36,7 @@ ALLOWED_FILES = frozenset({
     "tools/pi_artifact_store.py",
     "tools/pi_artifact_verify.py",
     "tools/pi_artifact_cleanup.py",
+    "tools/pi_archive_config.py",
     "tools/public_guard.py",
     "tools/run_encrypted_fixture.py",
 })

@@ -78,7 +78,17 @@ own actual `age` public recipient):
 install -d -m 700 ~/.config/ci-relay-lab
 printf '%s\n' 'age1YOUR_OFFLINE_RECOVERY_PUBLIC_KEY' > ~/.config/ci-relay-lab/archive-recipient.agepub
 chmod 600 ~/.config/ci-relay-lab/archive-recipient.agepub
+# Once the OFFLINE recovery key is backed up safely, make encryption mandatory:
+python3 tools/pi_archive_config.py --require-encryption
 ```
+
+The last command creates a protected fail-closed policy marker. Once enabled,
+future archival **refuses to write plaintext** if the configured public
+recipient disappears, has the wrong permissions, or is malformed. The key
+must be restored before dispatch can continue. This does not protect against
+someone with administrative access deliberately removing both configuration
+files or altering the running code. The live Pi does **not** have an offline
+recovery recipient configured yet, so its current archives remain plaintext.
 
 The placeholder is deliberately invalid. Do not create the recovery private
 key on the Pi, paste it into a GitHub secret, or commit it anywhere. If the

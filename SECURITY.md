@@ -110,6 +110,11 @@ dashboard may safely display coarse non-sensitive status only.
   creation fails closed; GitHub transfers are not deleted. A manifest schema-3
   archive records ciphertext hashes so GitHub cleanup can complete without the
   private recovery key. Existing plaintext archives are not migrated.
+- After the recovery recipient is installed, running
+  `python3 tools/pi_archive_config.py --require-encryption` writes a private
+  fail-closed policy marker. If the public recipient later disappears, the Pi
+  refuses new plaintext archives instead of silently downgrading security.
+  Encryption is *not currently enabled* without that offline recipient.
 - The Pi currently has an unencrypted ext4 root volume and disk-backed swap;
   optional archive encryption is not a substitute for encrypted swap or FDE.
   Plaintext may remain in process memory/swap while a live CI run is decrypted.

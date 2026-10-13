@@ -31,6 +31,11 @@ MAX_MANIFEST_BYTES = 16 * 1024
 MAX_RECEIPT_BYTES = 4 * 1024
 AGE_EXE = Path(__file__).resolve().parents[1] / ".age-bin" / "age"
 ARCHIVE_RECIPIENT_FILE = Path.home() / ".config" / "ci-relay-lab" / "archive-recipient.agepub"
+ARCHIVE_REQUIREMENT_TEXT = b"age-x25519-encryption-required-v1\n"
+
+
+def _encryption_requirement_path(recipient_path: Path) -> Path:
+    return recipient_path.with_name("archive-encryption-required")
 
 
 def configured_archive_recipient(path: Path = ARCHIVE_RECIPIENT_FILE) -> str | None:
@@ -39,13 +44,44 @@ def configured_archive_recipient(path: Path = ARCHIVE_RECIPIENT_FILE) -> str | N
     Missing is legacy plaintext compatibility, malformed/unsafe configuration
     fails closed instead of silently writing plaintext to the Pi's SSD.
     """
+    marker = _encryption_requirement_path(path)
+    required = marker.exists() or marker.is_symlink()
+    if required:
+        with _open_verified_file(marker, 128) as source:
+            if source.read() != ARCHIVE_REQUIREMENT_TEXT:
+                raise RuntimeError("Invalid mandatory at-rest encryption setting")
     if not path.exists() and not path.is_symlink():
+        if required:
+            raise RuntimeError("Offline recovery recipient missing; refusing plaintext downgrade")
         return None
     with _open_verified_file(path, 512) as source:
         recipient = source.read().decode("ascii").strip()
     if not is_age_recipient(recipient):
         raise RuntimeError("Invalid offline archive recovery public recipient")
     return recipient
+
+
+def require_archive_encryption(path: Path = ARCHIVE_RECIPIENT_FILE) -> None:
+    """Permanently require age encryption for this archive configuration.
+
+    Call only after installing an OFFLINE key's public recipient. On reboot or
+    missing-key errors, the dispatcher will refuse to archive plaintext.
+    This deliberately never reads/stores an offline private identity.
+    """
+    if configured_archive_recipient(path) is None:
+        raise RuntimeError("Install the offline PUBLIC recipient before enabling encryption")
+    _private_dir(path.parent)
+    marker = _encryption_requirement_path(path)
+    if marker.exists() or marker.is_symlink():
+        configured_archive_recipient(path)
+        return
+    fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+                 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(ARCHIVE_REQUIREMENT_TEXT)
+        stream.flush()
+        os.fsync(stream.fileno())
+    _sync_directory(marker.parent)
 
 
 def _encrypt_for_offline_recipient(data: bytes, recipient: str) -> bytes:

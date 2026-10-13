@@ -10,7 +10,8 @@ import unittest
 
 from tools.pi_artifact_store import (archive_run, read_verified_archive,
                                      pending_github_cleanup,
-                                     configured_archive_recipient)
+                                     configured_archive_recipient,
+                                     require_archive_encryption)
 from tools.pi_artifact_cleanup import (cleanup_github_artifacts,
                                         cleanup_all_pending)
 from tools.ephemeral_age import ephemeral_identity
@@ -179,6 +180,39 @@ class DurableArchiveTest(unittest.TestCase):
             path.write_text(recovery.recipient + "\n", encoding="ascii")
             self.assertEqual(configured_archive_recipient(path), recovery.recipient)
             path.chmod(0o644)
+            with self.assertRaises(RuntimeError):
+                configured_archive_recipient(path)
+
+    def test_encryption_requirement_prevents_missing_key_plaintext_downgrade(self):
+        path = Path(self.temp.name) / "archive-recipient.agepub"
+        with self.assertRaises(RuntimeError):
+            require_archive_encryption(path)
+        with ephemeral_identity() as recovery:
+            path.write_text(recovery.recipient + "\n", encoding="ascii")
+            path.chmod(0o600)
+            require_archive_encryption(path)
+            require_archive_encryption(path)  # idempotent
+            self.assertEqual(configured_archive_recipient(path), recovery.recipient)
+            path.unlink()
+            with self.assertRaisesRegex(RuntimeError, "refusing plaintext downgrade"):
+                configured_archive_recipient(path)
+            path.write_text(recovery.recipient + "\n", encoding="ascii")
+            path.chmod(0o600)
+            self.assertEqual(configured_archive_recipient(path), recovery.recipient)
+            marker = path.with_name("archive-encryption-required")
+            marker.write_text("invalid", encoding="ascii")
+            with self.assertRaises(RuntimeError):
+                configured_archive_recipient(path)
+
+    def test_encryption_requirement_rejects_corrupt_marker_and_unsafe_permissions(self):
+        path = Path(self.temp.name) / "archive-recipient.agepub"
+        with ephemeral_identity() as recovery:
+            path.write_text(recovery.recipient + "\n", encoding="ascii")
+            path.chmod(0o600)
+            require_archive_encryption(path)
+            marker = path.with_name("archive-encryption-required")
+            self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+            marker.chmod(0o644)
             with self.assertRaises(RuntimeError):
                 configured_archive_recipient(path)
             path.unlink()
