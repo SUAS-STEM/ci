@@ -18,6 +18,31 @@ The public runner does **not** upload Actions artifacts; the private Release is 
 
 ## Controls and residual risks
 
+### Encrypted synthetic-source/MSVC test (distinct threat model)
+
+`secure-opaque-build.yml` is separate from the original **public fixture only**
+`fixture.yml`. The opaque worker checks out only reviewed public relay code,
+but it then explicitly decrypts and compiles an encrypted synthetic CMake
+source bundle and private `.ps1` script. Its temporary workspace and Windows
+compiler contain source plaintext. GitHub/Microsoft runner infrastructure,
+compromised runner execution, and maintainers able to alter trusted public
+workflow code are not excluded from the trust boundary.
+
+The private coordinator generates an ephemeral age recipient for results;
+the Windows worker generates a different ephemeral age keypair for inputs.
+Only public recipients and authenticated age ciphertext are transported in
+short-lived PUBLIC prerelease assets. The **verbatim combined** compiler
+stdout/stderr bytes and exit-code/log-hash status are encrypted separately.
+The successful synthetic proof is public Actions run #38478171900; the
+resulting binary/log exist only in private Release `opaque-ci-38478171900`.
+
+The PowerShell subprocess has the public `GH_TOKEN` and `GITHUB_TOKEN`
+environment variables removed, but the parent runner process still holds the
+public repository's release-upload token. This **does not provide a strong OS
+isolation boundary** against malicious source or scripts. The protocol is an
+experimental demonstration; it is not approved for confidential production
+source, credentials, or unrelated third-party projects.
+
 - The built-in public `GITHUB_TOKEN` has read-only permission, and no Pi token or release-writer permission is available to public runners. The private-release writer remains on the Pi. A dedicated repository-scoped GitHub App token should replace the Pi's broad personal token for unattended production operation.
 - Source confidentiality cannot be achieved if proprietary GCS code is built on a public GitHub-hosted runner, even if GitHub Release publication is private. Use a trusted private execution environment for such builds.
 - Ciphertext transport in **public** workflow logs means those encrypted bytes may be retained under GitHub's log-retention policy. No Actions artifacts are created; GitHub run logs are a separate storage class.

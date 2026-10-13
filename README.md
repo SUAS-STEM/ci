@@ -32,6 +32,45 @@ The above run was a **one-time feature-branch proof**. Its temporary push-trigge
 
 ## Security boundaries and limitations
 
+### Experimental related-project encrypted Windows/MSVC relay
+
+`secure-opaque-build.yml` is a **separate** protocol: a lightweight private
+coordinator dispatches this PUBLIC repository's Windows/MSVC runner to compile
+an encrypted source bundle and private PowerShell build script. The worker
+generates a one-time age keypair and publishes only its PUBLIC recipient;
+the coordinator encrypts the source and `.ps1` to that recipient inside a
+short-lived PUBLIC prerelease containing only ciphertext. The Windows runner
+decrypts and compiles inside its temporary workspace, captures **the unchanged
+combined compiler stdout/stderr byte stream**, and returns that log, a
+separately authenticated status/hash, and the compiled `.exe`, all encrypted
+to a separate one-time PRIVATE-side recipient. The private coordinator
+validates and decrypts the results, publishes the actual binary, private
+build log, checksum, and provenance into a PRIVATE Release, and deletes the
+temporary PUBLIC ciphertext prerelease. **Zero Actions artifacts are used.**
+
+The real public `windows-2022` MSVC run
+[38478171900](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38478171900)
+succeeded using **only synthetic** source and `.ps1` from the isolated private
+[staging repository](https://github.com/SUAS-STEM/ci-private-build-lab). The
+return output is in [PRIVATE Release `opaque-ci-38478171900`](https://github.com/SUAS-STEM/ci-private-build-lab/releases/tag/opaque-ci-38478171900).
+The public job logs were checked for private synthetic markers and executable
+paths (neither appeared); its Actions artifact inventory was zero. The Pi
+verified the private Release and saved an owner-only archive. The short-lived
+public prerelease and one-time branch test workflow were removed afterward.
+
+This successful test used the Pi as the private-side coordinator; **private
+GitHub-hosted Actions billing still blocks a complete private Actions test**.
+The permanent PUBLIC dispatch workflow is still on an unmerged, independently
+reviewed PR and is not enabled on protected `main`. No GCS repository code was
+accessed, forwarded, or changed.
+
+**Threat-model limit:** Encryption protects the contents from ordinary public
+observers, but not from the GitHub/Microsoft runner infrastructure or an
+attacker who controls its workflow/runtime. The public job's workflow source,
+run metadata, one-time public keys, and encrypted temporary assets are visible.
+The worker's release-upload token has write access **only to its public repo**,
+not the private source or private output repository.
+
 ### Drop-in private-source build workflow (separate from this public test)
 
 A **private** repository can call the *publicly readable workflow definition*
