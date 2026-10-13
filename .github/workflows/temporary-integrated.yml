@@ -1,25 +1,9 @@
 name: Synthetic cross-platform CI
-run-name: fixture-${{ inputs.trace_id }}
+run-name: fixture-test-c8f7351b4bff
 
 on:
-  workflow_dispatch:
-    inputs:
-      trace_id:
-        description: Non-sensitive test identifier (alphanumeric and hyphens)
-        required: true
-        type: string
-      left:
-        description: Synthetic left operand
-        required: true
-        type: string
-      right:
-        description: Synthetic right operand
-        required: true
-        type: string
-      age_recipient:
-        description: Pi-generated, one-run-only PUBLIC age recipient
-        required: true
-        type: string
+  push:
+    branches: [security/signed-artifact-provenance]
 
 permissions:
   contents: read
@@ -30,7 +14,7 @@ concurrency:
 
 jobs:
   test:
-    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.actor == 'eschan145'
+    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/security/signed-artifact-provenance' && github.event_name == 'push' && github.actor == 'eschan145'
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 12
@@ -44,15 +28,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Reject nonpublic source or unapproved workflow context
-        run: python -m tools.public_guard
+        run: python -m tools.public_guard --tree-only
       - name: Install checksum-verified age encryption utility
         run: python tools/install_age.py
       - name: Capture and encrypt all synthetic build/test output
         env:
-          TRACE_ID: ${{ inputs.trace_id }}
-          LEFT: ${{ inputs.left }}
-          RIGHT: ${{ inputs.right }}
-          AGE_RECIPIENT: ${{ inputs.age_recipient }}
+          TRACE_ID: test-c8f7351b4bff
+          LEFT: '17'
+          RIGHT: '-3'
+          AGE_RECIPIENT: age135zcs57rhlp5pfdauq8hsvrkgfpunxt4je23yjl054udf8xa34uq6k6y64
         run: python -m tools.run_encrypted_fixture
       - name: Upload encrypted diagnostics and synthetic executable
         if: always()
@@ -70,7 +54,7 @@ jobs:
     # Separate privilege boundary: compilation/test runners cannot issue
     # provenance certificates and this job never checks out or runs source.
     name: attest-ciphertext
-    if: always() && github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.actor == 'eschan145'
+    if: always() && github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/security/signed-artifact-provenance' && github.event_name == 'push' && github.actor == 'eschan145'
     needs: [test]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
