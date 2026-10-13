@@ -56,6 +56,9 @@ using GitHub's short-lived OIDC/Sigstore identity. The Pi verifies each signed
 artifact against the expected GitHub repository, workflow, branch and exact
 commit **before** it decrypts anything. The build jobs retain read-only
 permissions; only the separate signing job has attestation permissions.
+The Pi also verifies each downloaded ZIP's exact GitHub-published SHA-256
+before inspecting its single expected ciphertext file. No arbitrary archive
+filenames are extracted into the filesystem.
 GitHub still exposes job names, run status, workflow metadata and any output
 produced *outside* that capture wrapper. This proves the test wrapper works;
 it does **not** turn a public repository into secure private-build infrastructure.

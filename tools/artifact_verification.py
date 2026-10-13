@@ -1,9 +1,13 @@
 """Verify signed provenance before Pi decryption of synthetic CI artifacts."""
 
 import hashlib
+import hmac
+from io import BytesIO
 import json
 from pathlib import Path
 import re
+import stat
+import zipfile
 
 
 REPO = "SUAS-STEM/ci-relay-lab"
@@ -29,6 +33,40 @@ def validate_catalog(catalog: dict, run_id: int) -> None:
         workflow = item.get("workflow_run") or {}
         if workflow and workflow.get("id") != run_id:
             raise ValueError("Incorrect artifact run")
+
+
+def extract_ciphertext_zip(blob: bytes, metadata: dict) -> bytes:
+    """Validate the exact GitHub artifact ZIP before extracting any bytes.
+
+    No blind unzip, no paths supplied by an untrusted archive, and a tight
+    decompressed size cap. GitHub API's published digest covers the ZIP bytes.
+    """
+    if not 100 < len(blob) < MAX_BYTES or len(blob) != metadata.get("size_in_bytes"):
+        raise ValueError("Artifact ZIP size differs from authenticated metadata")
+    published = str(metadata.get("digest", ""))
+    computed = "sha256:" + hashlib.sha256(blob).hexdigest()
+    if not hmac.compare_digest(published, computed):
+        raise ValueError("Artifact ZIP digest mismatch")
+    try:
+        with zipfile.ZipFile(BytesIO(blob)) as archive:
+            members = archive.infolist()
+            if len(members) != 1 or members[0].filename != "encrypted-log.age":
+                raise ValueError("Unexpected file or path in encrypted artifact")
+            member = members[0]
+            mode = (member.external_attr >> 16) & 0xFFFF
+            if member.is_dir() or (mode and stat.S_IFMT(mode) not in (0, stat.S_IFREG)):
+                raise ValueError("Artifact member cannot be a symlink or special file")
+            if not 100 < member.file_size < MAX_BYTES:
+                raise ValueError("Encrypted artifact decompressed size invalid")
+            with archive.open(member, "r") as source:
+                ciphertext = source.read(MAX_BYTES + 1)
+            if len(ciphertext) != member.file_size or len(ciphertext) >= MAX_BYTES:
+                raise ValueError("Encrypted artifact exceeds extraction limit")
+            if not ciphertext.startswith(b"age-encryption.org/v1\n"):
+                raise ValueError("ZIP did not contain an age ciphertext")
+            return ciphertext
+    except (zipfile.BadZipFile, EOFError, RuntimeError) as exc:
+        raise ValueError("Invalid ciphertext ZIP archive") from exc
 
 
 def validate_verified_record(records: list, expected_digest: str) -> None:

@@ -1,11 +1,47 @@
 import tempfile
+import hashlib
+from io import BytesIO
 from pathlib import Path
 import unittest
+import zipfile
 
 from tools import artifact_verification as av
 
 
 class VerificationTests(unittest.TestCase):
+    @staticmethod
+    def make_archive(filename="encrypted-log.age", data=None):
+        if data is None:
+            data = b"age-encryption.org/v1\n" + b"X" * 200
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(filename, data)
+        blob = buffer.getvalue()
+        metadata = {"size_in_bytes": len(blob),
+                    "digest": "sha256:" + hashlib.sha256(blob).hexdigest()}
+        return blob, metadata, data
+
+    def test_verified_archive_extracts_exact_ciphertext(self):
+        blob, metadata, ciphertext = self.make_archive()
+        self.assertEqual(av.extract_ciphertext_zip(blob, metadata), ciphertext)
+
+    def test_modified_artifact_zip_is_rejected(self):
+        blob, metadata, _ = self.make_archive()
+        changed = bytearray(blob)
+        changed[45] ^= 1
+        with self.assertRaises(ValueError):
+            av.extract_ciphertext_zip(bytes(changed), metadata)
+
+    def test_zip_slip_filename_is_rejected(self):
+        blob, metadata, _ = self.make_archive("../../outside.age")
+        with self.assertRaises(ValueError):
+            av.extract_ciphertext_zip(blob, metadata)
+
+    def test_zip_bomb_is_rejected_before_decompression(self):
+        blob, metadata, _ = self.make_archive(data=b"age-encryption.org/v1\n" + b"0" * av.MAX_BYTES)
+        with self.assertRaises(ValueError):
+            av.extract_ciphertext_zip(blob, metadata)
+
     def test_no_attestation_is_rejected(self):
         with self.assertRaises(ValueError):
             av.validate_verified_record([], "a" * 64)

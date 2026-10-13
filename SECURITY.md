@@ -36,6 +36,11 @@ compile, decrypt, package, test or transmit nonpublic or proprietary source.
   absent, tampered or incorrectly signed artifacts fail closed.
 - The Pi downloads only two known artifact names and rejects any extra files,
   missing artifact, incorrect size or unsupported ciphertext format.
+- The Pi retrieves each artifact ZIP from GitHub's API, verifies the exact
+  published ZIP SHA-256 and byte count, then inspects it using a bounded ZIP
+  parser. Only the single `encrypted-log.age` file is accepted; traversal
+  paths, additional files, symlinks, invalid sizes, and oversized expanded
+  content are rejected before extracting the ciphertext.
 - Every dispatch receives a **different** X25519 recipient private key generated
   directly into a sealed Linux memfd. Only that recipient's public key is sent
   to GitHub. The Pi checks the recipient digest inside decrypted run metadata;

@@ -16,11 +16,13 @@ import time
 
 try:
     from .check_fixture import parse_request
-    from .artifact_verification import validate_catalog, verify_signed_ciphertext
+    from .artifact_verification import (validate_catalog, verify_signed_ciphertext,
+                                        extract_ciphertext_zip)
     from .ephemeral_age import ephemeral_identity, EphemeralIdentity
 except ImportError:
     from check_fixture import parse_request
-    from artifact_verification import validate_catalog, verify_signed_ciphertext
+    from artifact_verification import (validate_catalog, verify_signed_ciphertext,
+                                       extract_ciphertext_zip)
     from ephemeral_age import ephemeral_identity, EphemeralIdentity
 
 
@@ -98,22 +100,26 @@ def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
         "api", f"repos/{REPO}/actions/runs/{run_id}/artifacts",
     ))
     validate_catalog(catalog, run_id)
-    # This directory is ephemeral; decrypted logs are held only in memory.
+    # GitHub's API publishes the SHA-256 digest of each *ZIP* artifact.
+    # Independently validate it, plus ZIP paths/types/sizes, before extraction.
     with tempfile.TemporaryDirectory(prefix="ci-relay-logs-") as directory:
         private_logs = {}
         for platform in PLATFORMS:
             destination = Path(directory) / platform
             destination.mkdir(mode=0o700)
-            gh("run", "download", str(run_id), "--repo", REPO,
-               "--name", f"encrypted-diagnostics-{platform}",
-               "--dir", str(destination))
-            if sorted(p.name for p in destination.iterdir()) != ["encrypted-log.age"]:
-                raise RuntimeError(f"Unexpected downloaded files for {platform}")
+            metadata = next(item for item in catalog["artifacts"]
+                            if item["name"] == f"encrypted-diagnostics-{platform}")
+            compressed = subprocess.run(
+                ["gh", "api", f"repos/{REPO}/actions/artifacts/{metadata['id']}/zip"],
+                capture_output=True, check=True, timeout=45,
+            ).stdout
+            ciphertext = extract_ciphertext_zip(compressed, metadata)
             artifact = destination / "encrypted-log.age"
-            if not artifact.is_file():
-                raise RuntimeError(f"Missing ciphertext artifact from {platform}")
-            if artifact.is_symlink() or not 100 < artifact.stat().st_size <= MAX_ARTIFACT_BYTES:
-                raise RuntimeError(f"Invalid encrypted artifact type/size for {platform}")
+            # A private, predictable name in a newly created 0700 directory;
+            # no filename/path from the ZIP archive is ever used.
+            fd = os.open(artifact, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "wb") as output:
+                output.write(ciphertext)
             # age alone proves authenticity of bytes under its secret key, not
             # who encrypted them. Verify GitHub OIDC/Sigstore provenance FIRST.
             verify_signed_ciphertext(gh, artifact, expected_sha)
