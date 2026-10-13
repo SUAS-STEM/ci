@@ -17,8 +17,10 @@ import time
 
 try:
     from .check_fixture import parse_request
+    from .artifact_verification import validate_catalog, verify_signed_ciphertext
 except ImportError:
     from check_fixture import parse_request
+    from artifact_verification import validate_catalog, verify_signed_ciphertext
 
 
 REPO = "SUAS-STEM/ci-relay-lab"
@@ -92,7 +94,7 @@ def validate_run_details(details: dict, expected_sha: str) -> None:
     if details.get("event") != "workflow_dispatch" or details.get("headBranch") != "main":
         raise RuntimeError("Unrecognized run origin")
     jobs = details.get("jobs", [])
-    if sorted(job["name"] for job in jobs) != sorted(PLATFORMS):
+    if sorted(job["name"] for job in jobs) != sorted((*PLATFORMS, "attest-ciphertext")):
         raise RuntimeError("Missing, duplicated, or unexpected matrix job")
 
 
@@ -101,16 +103,31 @@ def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
     if not AGE_EXE.is_file():
         raise RuntimeError("Pi-only decryption identity or age utility is unavailable")
     verify_local_key()
+    if job_conclusions.get("attest-ciphertext") != "success":
+        raise RuntimeError("Ciphertext provenance signer did not complete successfully")
+    catalog = json.loads(gh(
+        "api", f"repos/{REPO}/actions/runs/{run_id}/artifacts",
+    ))
+    validate_catalog(catalog, run_id)
     # This directory is ephemeral; decrypted logs are held only in memory.
     with tempfile.TemporaryDirectory(prefix="ci-relay-logs-") as directory:
-        gh("run", "download", str(run_id), "--repo", REPO, "--dir", directory)
         private_logs = {}
         for platform in PLATFORMS:
-            artifact = Path(directory) / f"encrypted-diagnostics-{platform}" / "encrypted-log.age"
+            destination = Path(directory) / platform
+            destination.mkdir(mode=0o700)
+            gh("run", "download", str(run_id), "--repo", REPO,
+               "--name", f"encrypted-diagnostics-{platform}",
+               "--dir", str(destination))
+            if sorted(p.name for p in destination.iterdir()) != ["encrypted-log.age"]:
+                raise RuntimeError(f"Unexpected downloaded files for {platform}")
+            artifact = destination / "encrypted-log.age"
             if not artifact.is_file():
                 raise RuntimeError(f"Missing ciphertext artifact from {platform}")
             if artifact.is_symlink() or not 100 < artifact.stat().st_size <= MAX_ARTIFACT_BYTES:
                 raise RuntimeError(f"Invalid encrypted artifact type/size for {platform}")
+            # age alone proves authenticity of bytes under its secret key, not
+            # who encrypted them. Verify GitHub OIDC/Sigstore provenance FIRST.
+            verify_signed_ciphertext(gh, artifact, expected_sha)
             decrypted = subprocess.run(
                 [str(AGE_EXE), "--decrypt", "-i", str(IDENTITY_FILE), str(artifact)],
                 check=True, capture_output=True, timeout=30,

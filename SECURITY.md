@@ -19,11 +19,23 @@ compile, decrypt, package, test or transmit nonpublic or proprietary source.
   arbitrary commands, source archives or external payloads.
 - An allowlist checks all committed paths. Unexpected files, symlinks,
   oversized files or modifications to toy C++ source fail closed.
-- No privileged Actions token. Third-party Actions and crypto tools are pinned;
+- Build runners have read-only Actions tokens. A separate, tightly scoped
+  signer may write provenance and request GitHub OIDC identity only. All four
+  approved Actions and downloaded crypto binaries are pinned/verified;
   artifact retention is 1 day and no caches are uploaded.
 - Compiler and test subprocess stdout/stderr are captured before encryption.
   A random canary and deliberate error check that captured output doesn't
   appear in public logs; the Pi verifies both encrypted reports and run SHA.
+- A **separate** attestation-only GitHub-hosted job obtains narrowly scoped
+  `id-token: write` and `attestations: write` permissions. Build jobs stay
+  read-only. The signer handles only ciphertext, not code, runner secrets or
+  Pi decryption keys.
+- GitHub OIDC/Sigstore signed attestations bind each ciphertext's SHA-256 digest
+  to the specific repository, signer workflow, main ref and source commit.
+  The Pi requires verification of all of those conditions before decryption;
+  absent, tampered or incorrectly signed artifacts fail closed.
+- The Pi downloads only two known artifact names and rejects any extra files,
+  missing artifact, incorrect size or unsupported ciphertext format.
 
 ## What encryption **does not** protect
 
@@ -42,3 +54,20 @@ GitHub's Actions Terms also restrict unrelated private build workloads on
 GitHub-hosted runners in public repositories. If private software must actually
 be built, use trusted isolated compute with private logs; a public web-visible
 dashboard may safely display coarse non-sensitive status only.
+
+## Artifact security properties
+
+- Confidentiality uses age v1 with X25519 ephemeral key agreement,
+  ChaCha20-Poly1305 streaming AEAD, and HKDF-SHA-256. Its file key is randomly
+  generated for every artifact. No passwords or public Actions secrets are used.
+- Modified, truncated, or incorrectly keyed ciphertext fails authenticated
+  decryption. The `age` public recipient is **not** a sender signature: anyone
+  with it can encrypt arbitrary plaintext.
+- Signed Sigstore build provenance adds *sender/workflow identity*, not secrecy.
+  A compromised trusted workflow could still attest malicious output. Signed
+  provenance also cannot prevent the hosted runner from reading toy source.
+- Ciphertext ZIP artifacts and signed provenance are publicly retrievable.
+  Their 1-day retention is for data minimization, **not** confidentiality.
+- The private age identity stored as a Pi `0600` file is vulnerable if the
+  same Pi user or host is compromised. It must be kept off public servers,
+  safeguarded with encrypted backups and rotated if suspected compromised.

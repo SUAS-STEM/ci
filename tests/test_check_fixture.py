@@ -42,7 +42,7 @@ class HostileDispatchTest(unittest.TestCase):
                 dispatcher.locate_run("test-12345", self.SHA)
 
     def test_reject_wrong_run_origin(self):
-        details = {"headSha": self.SHA, "event": "pull_request", "headBranch": "main", "jobs": [{"name": n} for n in dispatcher.PLATFORMS]}
+        details = {"headSha": self.SHA, "event": "pull_request", "headBranch": "main", "jobs": [{"name": n} for n in (*dispatcher.PLATFORMS, "attest-ciphertext")]}
         with self.assertRaisesRegex(RuntimeError, "Unrecognized run origin"):
             dispatcher.validate_run_details(details, self.SHA)
 

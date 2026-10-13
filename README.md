@@ -44,6 +44,11 @@ Build/test subprocesses receive a sanitized environment that excludes
 runner tokens and credential-like variables while preserving compiler discovery
 metadata needed by Windows CMake. This filter is defense in depth, not isolation.
 After upload, the Pi downloads each platform's artifact and decrypts locally.
+An independent attestation-only job signs a SHA-256 hash of each encrypted file
+using GitHub's short-lived OIDC/Sigstore identity. The Pi verifies each signed
+artifact against the expected GitHub repository, workflow, branch and exact
+commit **before** it decrypts anything. The build jobs retain read-only
+permissions; only the separate signing job has attestation permissions.
 GitHub still exposes job names, run status, workflow metadata and any output
 produced *outside* that capture wrapper. This proves the test wrapper works;
 it does **not** turn a public repository into secure private-build infrastructure.
@@ -62,8 +67,8 @@ it does **not** turn a public repository into secure private-build infrastructur
 - The Pi checks that local HEAD, remote `main`, and actual workflow run commit
   all match. It rejects mismatched runs and verifies encrypted report metadata
   contains the exact run ID, platform and commit before accepting diagnostics.
-- Only the two SHA-pinned GitHub actions in this workflow are permitted by the
-  repository Actions policy. Action SHA pinning is required in GitHub settings.
+- Only the four SHA-pinned GitHub actions in these workflows are permitted by
+  the repository Actions policy. Action SHA pinning is required in GitHub settings.
 - Secret scanning and push protection are enabled for this public repository.
 - The trigger is manual; no runner registration, polling daemon, systemd unit,
   webhook listener, GCS branch hook, or private CI workflow is installed.

@@ -58,3 +58,38 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+
+  attest-ciphertext:
+    # Separate privilege boundary: compilation/test runners cannot issue
+    # provenance certificates and this job never checks out or runs source.
+    name: attest-ciphertext
+    if: always() && github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.actor == 'eschan145'
+    needs: [test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download Linux ciphertext only
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: encrypted-diagnostics-ubuntu-24.04
+          path: ciphertext/linux
+      - name: Download Windows ciphertext only
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: encrypted-diagnostics-windows-2025
+          path: ciphertext/windows
+      - name: Sign GitHub OIDC provenance for Linux ciphertext
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: ciphertext/linux/encrypted-log.age
+          show-summary: false
+      - name: Sign GitHub OIDC provenance for Windows ciphertext
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: ciphertext/windows/encrypted-log.age
+          show-summary: false
