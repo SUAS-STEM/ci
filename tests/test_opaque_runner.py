@@ -14,7 +14,7 @@ from tools.opaque_runner import (read_packet, RECIPIENT, MARKER,
                                  capture_private_build, oidc_audience,
                                  oidc_result_audience,
                                  github_runner_oidc, trusted_source_asset,
-                                 receive_encrypted_source)
+                                 receive_encrypted_source, safe_bundle_name)
 
 
 class OpaquePacketTests(unittest.TestCase):
@@ -51,6 +51,33 @@ class OpaquePacketTests(unittest.TestCase):
                      "PRIVATE_TOKEN.txt", "README.md"):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 read_packet(self.packet(name), self.NONCE, self.SHA)
+
+    def test_reject_windows_reserved_ads_and_unsafe_names(self):
+        invalid = ("src/CON.txt", "src/AUX", "include/COM1.h", "vendor/Lpt9.lib",
+                   "src/source.cpp:payload", "src/trailing.", "src/.hidden",
+                   "src/foo bar.cpp", "src/foo\\bar.cpp", "src/foo//bar.cpp",
+                   "src/a?b.h", "src/clock$", "src/directory/../escape.h")
+        for name in invalid:
+            with self.subTest(name=name):
+                self.assertFalse(safe_bundle_name(name))
+                with self.assertRaisesRegex(ValueError, "Invalid encrypted"):
+                    read_packet(self.packet(name), self.NONCE, self.SHA)
+        for name in ("CMakeLists.txt", "src/_internal.cc",
+                     "include/core-v2/header.hpp", "vendor/lib3/archive.lib"):
+            with self.subTest(name=name):
+                self.assertTrue(safe_bundle_name(name))
+
+    def test_reject_archive_names_colliding_on_windows(self):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.writestr("manifest.json", json.dumps({
+                "nonce": self.NONCE, "source_commit": self.SHA,
+                "output": "ci-out/program.exe"}))
+            archive.writestr("build.ps1", b"exit 0")
+            archive.writestr("src/Main.cpp", b"int x;")
+            archive.writestr("src/main.cpp", b"int y;")
+        with self.assertRaisesRegex(ValueError, "Invalid encrypted"):
+            read_packet(output.getvalue(), self.NONCE, self.SHA)
 
     def test_wrong_nonce_or_commit_fails_closed(self):
         with self.assertRaises(ValueError):

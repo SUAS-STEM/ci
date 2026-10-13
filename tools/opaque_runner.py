@@ -30,6 +30,33 @@ RECIPIENT = re.compile(r"age1[023456789acdefghjklmnpqrstuvwxyz]{58}\Z")
 MAX_PACKET = 25 * 1024 * 1024
 MAX_SOURCE = 60 * 1024 * 1024
 MAX_LOG = 64 * 1024 * 1024
+WINDOWS_DEVICES = frozenset(("CON", "PRN", "AUX", "NUL",
+                             *(f"COM{i}" for i in range(1, 10)),
+                             *(f"LPT{i}" for i in range(1, 10))))
+SOURCE_DIRS = ("src", "include", "cmake", "vendor")
+
+
+def safe_bundle_name(name):
+    """Reject Windows reserved names, ADS, hidden paths and traversal.
+
+    Git tracks case-sensitive names on Linux, but the target MSVC runner uses
+    case-insensitive Windows paths. Only a restricted portable path subset is
+    accepted to prevent overwritten inputs or alternate data streams.
+    """
+    if not isinstance(name, str) or not name.isascii() or len(name) > 240:
+        return False
+    parts = name.split("/")
+    if not 1 <= len(parts) <= 12:
+        return False
+    if not (name in ("manifest.json", "build.ps1", "CMakeLists.txt")
+            or (len(parts) >= 2 and parts[0] in SOURCE_DIRS)):
+        return False
+    for part in parts:
+        if (not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", part)
+                or part.endswith(".")
+                or part.split(".", 1)[0].upper() in WINDOWS_DEVICES):
+            return False
+    return True
 
 
 def oidc_audience(nonce, private_sha, private_recipient, worker_recipient):
@@ -104,22 +131,20 @@ def read_packet(blob, nonce, source_commit):
         if not 2 <= len(members) <= 300:
             raise ValueError("Unexpected bundle file count")
         files = {}
+        windows_names = set()
         total = 0
         for member in members:
             name = member.filename
-            path = Path(name)
-            if (name.startswith("/") or "\\" in name or ".." in path.parts
-                    or path.is_absolute() or not name.isascii()
-                    or not (name in ("manifest.json", "build.ps1", "CMakeLists.txt")
-                            or any(name.startswith(folder) for folder in
-                                   ("src/", "include/", "cmake/", "vendor/")))
-                    or name in files or member.is_dir()
+            normalized = name.casefold()
+            if (not safe_bundle_name(name)
+                    or normalized in windows_names or member.is_dir()
                     or ((member.external_attr >> 16) & 0o170000) == 0o120000
                     or member.file_size > 3 * 1024 * 1024):
                 raise ValueError("Invalid encrypted archive member")
             total += member.file_size
             if total > MAX_SOURCE:
                 raise ValueError("Encrypted archive too large")
+            windows_names.add(normalized)
             files[name] = archive.read(member)
     if "manifest.json" not in files or "build.ps1" not in files:
         raise ValueError("Required private source/build script missing")
@@ -133,6 +158,8 @@ def read_packet(blob, nonce, source_commit):
 
 def unpack_into(files, work):
     for name, content in files.items():
+        if not safe_bundle_name(name) or name in ("manifest.json",):
+            raise ValueError("Refusing unsafe private build input path")
         dest = work.joinpath(*name.split("/"))
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.exists() or dest.is_symlink():
