@@ -1,0 +1,61 @@
+name: Temporary PUBLIC encrypted release integration proof
+run-name: fixture-${{ inputs.trace_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      trace_id:
+        description: Non-sensitive test identifier (alphanumeric and hyphens)
+        required: true
+        type: string
+      left:
+        description: Synthetic left operand
+        required: true
+        type: string
+      right:
+        description: Synthetic right operand
+        required: true
+        type: string
+      age_recipient:
+        description: Pi-generated, one-run-only PUBLIC age recipient
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: synthetic-lab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/security/signed-artifact-provenance' && github.event_name == 'workflow_dispatch' && github.actor == 'eschan145'
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - name: Checkout public synthetic project
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Reject nonpublic source or unapproved workflow context
+        run: python -m tools.public_guard --tree-only
+      - name: Install checksum-verified age encryption utility
+        run: python tools/install_age.py
+      - name: Capture and encrypt all synthetic build/test output
+        env:
+          TRACE_ID: ${{ inputs.trace_id }}
+          LEFT: ${{ inputs.left }}
+          RIGHT: ${{ inputs.right }}
+          AGE_RECIPIENT: ${{ inputs.age_recipient }}
+        run: python -m tools.run_encrypted_fixture
+      - name: Emit age ciphertext to GitHub CI logs for trusted Pi collection
+        if: always()
+        run: python -m tools.log_transport
+      # No upload-artifact / download-artifact. The Pi independently retrieves
+      # encrypted job logs, validates/decrypts, and publishes a private Release.
