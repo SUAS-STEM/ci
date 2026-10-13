@@ -15,7 +15,6 @@ import hashlib
 import os
 from pathlib import Path
 import re
-import resource
 import subprocess
 from typing import Iterator
 
@@ -43,6 +42,7 @@ def is_age_recipient(value: str) -> bool:
 
 def restrict_process_inspection() -> None:
     """Fail closed unless this Linux process disables dumps and user ptrace."""
+    import resource
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     libc = ctypes.CDLL(None, use_errno=True)
     # Linux PR_SET_DUMPABLE=4, 0 prevents same-UID procfs reads and ptrace.

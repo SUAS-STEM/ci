@@ -1,5 +1,5 @@
 name: Temporary signed ciphertext integration test
-run-name: fixture-test-458979cb47a8
+run-name: fixture-test-1e759c074716
 
 on:
   push:
@@ -33,10 +33,10 @@ jobs:
         run: python tools/install_age.py
       - name: Capture and encrypt all synthetic build/test output
         env:
-          TRACE_ID: test-458979cb47a8
+          TRACE_ID: test-1e759c074716
           LEFT: '17'
           RIGHT: '-3'
-          AGE_RECIPIENT: age16jf5rj0gja8u0jqpscewh3gt82k7kx4w7wtgl06gkavm09qe8veqs58yrl
+          AGE_RECIPIENT: age1pskp5cf024zm0prcpm54u0c745spgcr84dmwxqeltrzn0rs9a3ts8knten
         run: python -m tools.run_encrypted_fixture
       - name: Upload ciphertext only (never plaintext)
         if: always()

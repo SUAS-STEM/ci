@@ -3,7 +3,6 @@
 import os
 import ctypes
 from pathlib import Path
-import resource
 import subprocess
 import sys
 import tempfile
@@ -17,6 +16,7 @@ from tools.pi_fixture_dispatch import check_decrypted_report_binding
                      "sealed Pi-side Linux anonymous keys only")
 class EphemeralIdentityTest(unittest.TestCase):
     def test_private_identity_is_non_dumpable_and_locked_in_ram(self):
+        import resource
         with ephemeral_identity():
             # PR_GET_DUMPABLE=3. A user-space process must not be able to
             # attach as the same UID and dump the private-key pages.
