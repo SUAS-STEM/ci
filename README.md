@@ -35,14 +35,16 @@ no Python plaintext copy of the private key). Only the corresponding *public*
 recipient travels to GitHub as a workflow input. Two CI workers encrypt their
 independent output artifacts to the same one-run recipient. On the Pi, the
 private key's descriptor is inherited by only the `age` decryption subprocess;
-it is closed after verification. Previous artifacts cannot be decrypted after
+its memory pages are locked against swap, and the Pi disables ordinary process
+inspection and core dumps. The descriptor is closed after verification.
+Previous artifacts cannot be decrypted after
 that key is discarded. **If the dispatcher process dies, that run's logs are
 permanently unavailable; restart a fresh run.**
 
 The previous test's legacy persistent age identity exists only on the Pi for
 historical synthetic artifacts; the current protocol never reads it.
-Anonymous kernel memory can still be paged to swap or exposed by privileged
-process inspection or crash dumps; this is not hardware-backed key protection.
+Privileged kernel/root access and compromised processes remain threats; this
+is not hardware-backed key protection.
 
 The runner executes fixed, public C++ build/test commands with subprocess
 stdout/stderr captured in memory, then encrypts that stream with age. Even a

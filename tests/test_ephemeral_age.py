@@ -1,7 +1,9 @@
 """Per-run age identity tests; all plaintext is synthetic test content."""
 
 import os
+import ctypes
 from pathlib import Path
+import resource
 import subprocess
 import sys
 import tempfile
@@ -14,6 +16,15 @@ from tools.pi_fixture_dispatch import check_decrypted_report_binding
 @unittest.skipUnless(sys.platform.startswith("linux") and hasattr(os, "memfd_create"),
                      "sealed Pi-side Linux anonymous keys only")
 class EphemeralIdentityTest(unittest.TestCase):
+    def test_private_identity_is_non_dumpable_and_locked_in_ram(self):
+        with ephemeral_identity():
+            # PR_GET_DUMPABLE=3. A user-space process must not be able to
+            # attach as the same UID and dump the private-key pages.
+            self.assertEqual(ctypes.CDLL(None).prctl(3, 0, 0, 0, 0), 0)
+            self.assertEqual(resource.getrlimit(resource.RLIMIT_CORE), (0, 0))
+            status = Path("/proc/self/status").read_text()
+            self.assertRegex(status, r"(?m)^VmLck:\s+[1-9][0-9]* kB$")
+
     def test_identity_never_has_a_named_storage_file(self):
         with ephemeral_identity() as identity:
             self.assertTrue(is_age_recipient(identity.recipient))

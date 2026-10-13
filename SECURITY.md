@@ -79,8 +79,11 @@ dashboard may safely display coarse non-sensitive status only.
   Their 1-day retention is for data minimization, **not** confidentiality.
 - Each run's private identity lives in anonymous Pi kernel memory, which is
   closed after the dispatcher exits. Old ciphertext cannot be read with a
-  later run's key. Interrupting the Pi dispatcher irrecoverably loses the key.
-  Do not claim cryptographic forward secrecy against an attacker with live Pi
-  access: kernel memory, swap, process debugging and crash dumps remain risks.
+  later run's key. The Pi locks the identity's memory pages against swap,
+  disables process core dumps and disables ordinary same-UID ptrace/procfs
+  inspection while the dispatcher is running. If those protections are not
+  available, dispatch fails closed. Interrupting the Pi dispatcher irrecoverably
+  loses the key. This is not a hardware boundary: privileged Pi/root access,
+  malicious kernel modules and compromised child processes remain risks.
   Older **synthetic-only** test runs used a persistent identity that has no role
   in the newer per-run protocol.
