@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_FILES = frozenset({
     ".github/workflows/fixture.yml",
     ".github/workflows/security-review.yml",
+    ".github/workflows/signature-probe.yml",
     ".gitignore",
     "CMakeLists.txt",
     "README.md",
@@ -37,6 +38,7 @@ ALLOWED_FILES = frozenset({
 PUBLIC_FIXTURE_HASHES = {
     "src/synthetic_adder.cpp": "23c233de65d78fff841c5e2f00deafc3c0a0e3a51a68d53c9fca0308d6463fa2",
     "CMakeLists.txt": "6644c79516314b982566d0099a395a603006942f70f7c0b15ca517b676c6f8f2",
+    "keys/pi-logs.agepub": "6b537057a431a010a459b416a9befd50bdd7eb3b4f01afdaf570a93a671fc6e6",
 }
 
 

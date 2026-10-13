@@ -1,0 +1,25 @@
+name: Synthetic attestation integration probe
+
+on:
+  push:
+    branches: [security/signed-artifact-provenance]
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  sign-public-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Create literal, non-sensitive fixture
+        shell: bash
+        run: printf 'SYNTHETIC ATTESTATION TEST\n' > signed-public-fixture.txt
+      - name: Produce test Sigstore attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: signed-public-fixture.txt
+          show-summary: false
