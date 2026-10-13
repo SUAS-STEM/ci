@@ -45,7 +45,8 @@ signature, issuer, exact public workflow/run/commit and token freshness. This
 prevents an attacker with access to the temporary Release from simply
 substituting their own recipient key. The public runner and its operators
 remain inside the trust boundary.
-the coordinator encrypts the source and `.ps1` to that recipient inside a
+
+The coordinator encrypts the source and `.ps1` to that recipient inside a
 short-lived PUBLIC prerelease containing only ciphertext. The Windows runner
 decrypts and compiles inside its temporary workspace, captures **the unchanged
 combined compiler stdout/stderr byte stream**, and returns that log, a
@@ -74,6 +75,23 @@ The public job logs were checked for private synthetic markers and executable
 paths (neither appeared); its Actions artifact inventory was zero. The Pi
 verified the private Release and saved an owner-only archive. The short-lived
 public prerelease and one-time branch test workflow were removed afterward.
+
+### Automatic cleanup after coordinator interruptions
+
+The private coordinator normally deletes its temporary public encrypted
+prerelease after verifying the private Release. If the coordinator or Pi
+crashes, `.github/workflows/opaque-prerelease-cleanup.yml` runs **once daily**
+on the reviewed public `main` branch and deletes only its own encrypted
+prereleases older than 24 hours, after checking that no matching public runner
+is still active. It validates the public repository's immutable numeric ID,
+exact tag/notes, expected ciphertext-only filenames, SHA-256 asset metadata,
+and a repeat Release snapshot immediately before deletion. Any unexpected
+content or changed metadata fails closed rather than deleting unrelated
+Releases. No private token or private repository is accessed. The public
+workflow has not yet been merged/enabled; it will use a small amount of
+PUBLIC Linux Actions time (roughly one billed minute per day, subject to
+actual runtime). The separately prepared Pi cleanup timer remains disabled
+until an appropriately scoped credential is installed.
 
 This successful test used the Pi as the private-side coordinator; **private
 GitHub-hosted Actions billing still blocks a complete private Actions test**.

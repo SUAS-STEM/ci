@@ -1,0 +1,36 @@
+name: Expired encrypted transfer cleanup
+
+# A short, once-a-day PUBLIC Linux job removes only expired ciphertext-only
+# prereleases. No private token, source checkout or Actions artifacts.
+# Scheduled workflows execute only after a reviewed merge to DEFAULT main.
+on:
+  schedule:
+    - cron: '17 11 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opaque-encrypted-prerelease-gc
+  cancel-in-progress: false
+
+jobs:
+  expire-encrypted-transfers:
+    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    permissions:
+      contents: write  # PUBLIC repo Releases only; no private repo secrets
+    steps:
+      - name: Checkout reviewed PUBLIC-only cleanup policy
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Enforce exact public-only source guard
+        run: python3 -m tools.public_guard --tree-only
+      - name: Remove only old ciphertext-only prereleases with no active run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_PROMPT_DISABLED: '1'
+        run: python3 -m tools.opaque_prerelease_cleanup --apply --min-age-hours 24

@@ -18,6 +18,7 @@ ALLOWED_FILES = frozenset({
     ".github/workflows/private-reusable-build.yml",
     ".github/workflows/security-review.yml",
     ".github/workflows/secure-opaque-build.yml",
+    ".github/workflows/opaque-prerelease-cleanup.yml",
     ".gitignore",
     "CMakeLists.txt",
     "README.md",
@@ -38,7 +39,9 @@ ALLOWED_FILES = frozenset({
     "tools/pi_public_release.py",
     "tools/private_release_publish.py",
     "tools/opaque_runner.py",
+    "tools/opaque_prerelease_cleanup.py",
     "tests/test_opaque_runner.py",
+    "tests/test_opaque_prerelease_cleanup.py",
     "tests/test_private_release_publish.py",
     "tests/test_private_reusable_workflow.py",
 })

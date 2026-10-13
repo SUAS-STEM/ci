@@ -44,6 +44,19 @@ workflow revision, source commit, and one-time keys. The private coordinator
 rejects mismatched JWTs before printing diagnostics or publishing outputs.
 This additional result-signing step has local failure-path tests but is not
 part of the earlier successful full Windows build #38478171900.
+The GitHub-signed return-channel handshake and MSVC compilation subsequently
+passed in public run #38484774417; its private Release step initially failed
+because GitHub's draft listing was delayed. The private publisher now retries
+read visibility and rejects unexpected assets without overwriting them. A
+complete new hosted private Release publication using those exact revisions
+remains unverified.
+
+The optional daily PUBLIC cleanup workflow uses a PUBLIC-repo-only write
+token to remove recognized ciphertext-only prereleases older than 24 hours.
+It refuses changes to release ownership, asset digests and expected filenames,
+and skips an active public runner. It never accesses private source, artifacts,
+or credentials. This is a best-effort recovery measure, not a guarantee of
+immediate deletion after a catastrophic coordinator failure.
 The successful synthetic proof is public Actions run #38478171900; the
 resulting binary/log exist only in private Release `opaque-ci-38478171900`.
 
