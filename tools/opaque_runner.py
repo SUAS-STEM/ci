@@ -146,12 +146,15 @@ def main():
         raise ValueError("Unsafe encrypted build metadata")
     runner = Path(os.environ["RUNNER_TEMP"]) / ("ci-opaque-" + nonce)
     runner.mkdir(mode=0o700)
+    print("Opaque bootstrap: workspace ready", flush=True)
     identity = runner / "recipient-key.txt"
     produced = subprocess.run([str(KEYGEN), "-o", str(identity)],
                               check=True, capture_output=True, text=True, timeout=30)
+    print("Opaque bootstrap: key generator succeeded", flush=True)
     match = re.search(r"age1[023456789acdefghjklmnpqrstuvwxyz]{58}", produced.stderr)
     if match is None:
         raise RuntimeError("Unable to create one-time encryption identity")
+    print("Opaque bootstrap: recipient syntax verified", flush=True)
     pub = runner / "recipient.agepub"
     pub.write_text(match.group() + "\n", encoding="ascii")
     tag = "ci-opaque-" + nonce
