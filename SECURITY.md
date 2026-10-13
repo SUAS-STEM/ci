@@ -43,7 +43,7 @@ isolation boundary** against malicious source or scripts. The protocol is an
 experimental demonstration; it is not approved for confidential production
 source, credentials, or unrelated third-party projects.
 
-- The built-in public `GITHUB_TOKEN` has read-only permission, and no Pi token or release-writer permission is available to public runners. The private-release writer remains on the Pi. A dedicated repository-scoped GitHub App token should replace the Pi's broad personal token for unattended production operation.
+- The original public fixture uses a read-only `GITHUB_TOKEN`. The separate encrypted MSVC worker has **public-repository** `contents:write` permission to exchange short-lived encrypted prerelease assets; it does not receive any PRIVATE source or Release repository credential. This is a narrower trust boundary, not an isolated enclave. A dedicated repository-scoped GitHub App token should replace the Pi's broad personal token for unattended orchestration.
 - Source confidentiality cannot be achieved if proprietary GCS code is built on a public GitHub-hosted runner, even if GitHub Release publication is private. Use a trusted private execution environment for such builds.
 - Ciphertext transport in **public** workflow logs means those encrypted bytes may be retained under GitHub's log-retention policy. No Actions artifacts are created; GitHub run logs are a separate storage class.
 - If the Pi or dispatcher dies before decrypting a run, its one-time age identity is lost. Rerun CI with a new key; ciphertext logs alone cannot restore the key.

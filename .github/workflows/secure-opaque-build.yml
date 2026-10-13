@@ -52,6 +52,6 @@ jobs:
           CI_OUTPUT_RECIPIENT: ${{ inputs.output_recipient }}
         run: python -m tools.opaque_runner
       # Source, build.ps1, binaries, and captured diagnostics are transferred
-      # as encrypted files inside a temporary PUBLIC DRAFT GitHub Release.
+      # as encrypted files inside a short-lived PUBLIC prerelease.
       # This workflow never uploads Actions artifacts, and it never receives
       # credentials for the private source repository or private Release.
