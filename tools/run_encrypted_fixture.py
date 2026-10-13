@@ -1,0 +1,92 @@
+"""Capture *all sample subprocess stdout/stderr* and encrypt via age.
+
+Only runs the fixed toy project in this public repository. Deliberate failing
+commands verify that even their diagnostics remain inside the ciphertext.
+"""
+
+import os
+from pathlib import Path
+import secrets
+import subprocess
+import sys
+
+from check_fixture import parse_request
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PUBKEY_FILE = ROOT / "keys" / "pi-logs.agepub"
+AGE_EXE = ROOT / ".age-bin" / ("age.exe" if os.name == "nt" else "age")
+OUTPUT = ROOT / "encrypted-log.age"
+
+
+def main() -> int:
+    trace = os.environ["TRACE_ID"]
+    left = os.environ["LEFT"]
+    right = os.environ["RIGHT"]
+    parse_request(trace, left, right)
+    if not PUBKEY_FILE.is_file() or not AGE_EXE.is_file():
+        raise RuntimeError("Encryption prerequisites unavailable: fail closed")
+    recipient = PUBKEY_FILE.read_text().strip()
+    if not recipient.startswith("age1") or len(recipient) != 62:
+        raise RuntimeError("Invalid pinned public recipient key")
+
+    # Log data never appears on stdout/stderr; a subprocess failure only changes
+    # the encrypted report and (after encryption succeeds) the runner exit status.
+    chunks = []
+    failed = False
+
+    def capture(label: str, command: list[str], expected: int = 0, env=None) -> None:
+        nonlocal failed
+        try:
+            result = subprocess.run(
+                command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                timeout=120, check=False,
+            )
+            output = result.stdout
+            code = result.returncode
+        except subprocess.TimeoutExpired as error:
+            output = error.stdout or b""
+            code = -1
+        chunks.append(
+            (f"\n=== {label} (exit={code}; expected={expected}) ===\n").encode()
+            + output[:2 * 1024 * 1024]
+        )
+        if code != expected:
+            failed = True
+
+    canary = "SYNTHETIC_CANARY_" + secrets.token_hex(20)
+    chunks.append(f"trace={trace}\ncanary={canary}\n".encode())
+    capture("Python input validation", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"])
+    capture("CMake configure", ["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"])
+    capture("C++ compile", ["cmake", "--build", "build", "--config", "Release", "--parallel", "2"])
+    capture("CTest", ["ctest", "--test-dir", "build", "-C", "Release", "--output-on-failure"])
+    env = os.environ.copy()
+    capture("Synthetic numerical check", [sys.executable, "-m", "tools.check_fixture"], env=env)
+    # This is a fixed, harmless, intentional failure: its stderr is encrypted,
+    # and the workflow still succeeds when the exit code matches 47.
+    capture(
+        "Expected diagnostic failure (privacy test)",
+        [sys.executable, "-c", "import os,sys; sys.stderr.write(os.environ['SYNTHETIC_CANARY']+' expected error\\n'); sys.exit(47)"],
+        expected=47,
+        env={**os.environ, "SYNTHETIC_CANARY": canary},
+    )
+    payload = b"".join(chunks)
+    result = subprocess.run(
+        [str(AGE_EXE), "-r", recipient, "-o", str(OUTPUT), "-"],
+        input=payload,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Encryption failed: no logs may be uploaded")
+    print("Captured diagnostics encrypted using Pi's public key; plaintext not printed")
+    if failed:
+        print("One or more synthetic checks failed; details only in encrypted artifact")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

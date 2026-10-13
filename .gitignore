@@ -2,3 +2,5 @@ build/
 __pycache__/
 *.pyc
 .ci-relay-lab-last-run.json
+.age-bin/
+encrypted-log.age

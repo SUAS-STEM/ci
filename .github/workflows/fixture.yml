@@ -34,17 +34,20 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Run fixture validation unit tests
-        run: python -m unittest discover -s tests -v
-      - name: Configure public C++ sample
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-      - name: Build public C++ sample
-        run: cmake --build build --config Release --parallel 2
-      - name: CTest public C++ sample
-        run: ctest --test-dir build -C Release --output-on-failure
-      - name: Verify synthetic dispatch inputs against binary
+      - name: Install checksum-verified age encryption utility
+        run: python tools/install_age.py
+      - name: Capture and encrypt all synthetic build/test output
         env:
           TRACE_ID: ${{ inputs.trace_id }}
           LEFT: ${{ inputs.left }}
           RIGHT: ${{ inputs.right }}
-        run: python -m tools.check_fixture
+        run: python -m tools.run_encrypted_fixture
+      - name: Upload ciphertext only (never plaintext)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-diagnostics-${{ matrix.os }}
+          path: encrypted-log.age
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0

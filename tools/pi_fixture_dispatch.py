@@ -7,8 +7,10 @@ register with, or forward anything from a private repository.
 import argparse
 import json
 from pathlib import Path
+import re
 import secrets
 import subprocess
+import tempfile
 import time
 
 from check_fixture import parse_request
@@ -17,6 +19,9 @@ from check_fixture import parse_request
 REPO = "SUAS-STEM/ci-relay-lab"
 WORKFLOW = "fixture.yml"
 OUTPUT_FILE = Path(__file__).resolve().parents[1] / ".ci-relay-lab-last-run.json"
+IDENTITY_FILE = Path.home() / ".config" / "ci-relay-lab" / "identity.txt"
+AGE_EXE = Path(__file__).resolve().parents[1] / ".age-bin" / "age"
+PLATFORMS = ("ubuntu-24.04", "windows-2025")
 
 
 def gh(*args: str) -> str:
@@ -46,12 +51,54 @@ def locate_run(trace_id: str) -> int | None:
     return matches[0]["databaseId"] if matches else None
 
 
+def retrieve_private_logs(run_id: int, trace_id: str, show: bool) -> dict[str, str]:
+    if not IDENTITY_FILE.is_file() or not AGE_EXE.is_file():
+        raise RuntimeError("Pi-only decryption identity or age utility is unavailable")
+    # This directory is ephemeral; decrypted logs are held only in memory.
+    with tempfile.TemporaryDirectory(prefix="ci-relay-logs-") as directory:
+        gh("run", "download", str(run_id), "--repo", REPO, "--dir", directory)
+        private_logs = {}
+        for platform in PLATFORMS:
+            artifact = Path(directory) / f"encrypted-diagnostics-{platform}" / "encrypted-log.age"
+            if not artifact.is_file():
+                raise RuntimeError(f"Missing ciphertext artifact from {platform}")
+            decrypted = subprocess.run(
+                [str(AGE_EXE), "--decrypt", "-i", str(IDENTITY_FILE), str(artifact)],
+                check=True, capture_output=True, timeout=30,
+            ).stdout.decode("utf-8", errors="replace")
+            if f"trace={trace_id}" not in decrypted:
+                raise RuntimeError(f"Trace mismatch in encrypted logs from {platform}")
+            if f"PASS trace={trace_id}" not in decrypted:
+                raise RuntimeError(f"Synthetic binary result missing from {platform}")
+            if "=== Expected diagnostic failure (privacy test) (exit=47; expected=47) ===" not in decrypted:
+                raise RuntimeError(f"Expected synthetic failure not captured for {platform}")
+            if len(re.findall(r"SYNTHETIC_CANARY_[0-9a-f]{40}", decrypted)) != 2:
+                raise RuntimeError(f"Encrypted canary invalid for {platform}")
+            private_logs[platform] = decrypted
+
+        # Checking public logs is part of the end-to-end privacy fixture. This
+        # must not replace proper private CI isolation for sensitive workloads.
+        publicly_visible = gh("run", "view", str(run_id), "--repo", REPO, "--log")
+        for platform, body in private_logs.items():
+            canary = re.search(r"SYNTHETIC_CANARY_[0-9a-f]{40}", body).group(0)
+            if canary in publicly_visible or f"PASS trace={trace_id}" in publicly_visible:
+                raise RuntimeError(f"PLAINTEXT FOUND IN PUBLIC WORKFLOW LOGS ({platform})")
+        print("Verified synthetic canaries and test output are absent from public logs")
+
+        if show:
+            for platform, body in private_logs.items():
+                print(f"\n--- Decrypted {platform} log (Pi only) ---\n{body}")
+        return {platform: "decrypted and no public-canary leak detected"
+                for platform in private_logs}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--left", default="17")
     parser.add_argument("--right", default="-3")
     parser.add_argument("--timeout", type=int, default=900)
-    parser.add_argument("--show-logs", action="store_true")
+    parser.add_argument("--show-logs", action="store_true",
+                        help="Show decrypted diagnostic logs locally on Pi")
     args = parser.parse_args()
 
     trace_id = "test-" + secrets.token_hex(6)
@@ -102,10 +149,9 @@ def main() -> int:
     OUTPUT_FILE.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2), flush=True)
 
-    if args.show_logs and details.get("status") == "completed":
-        lines = gh("run", "view", str(run_id), "--repo", REPO, "--log").splitlines()
-        print(f"\n--- Public synthetic run logs (last {min(100, len(lines))} lines) ---")
-        print("\n".join(lines[-100:]), flush=True)
+    if details.get("status") == "completed":
+        result["encrypted_logs"] = retrieve_private_logs(run_id, trace_id, args.show_logs)
+        OUTPUT_FILE.write_text(json.dumps(result, indent=2) + "\n")
 
     if details.get("status") != "completed":
         raise TimeoutError(f"Timed out waiting for run {run_id}; see {result['url']}")

@@ -1,7 +1,7 @@
 # CI Relay Lab (public, synthetic only)
 
 Public CI experiment for a **public toy C++ project**. A Raspberry Pi can trigger a
-Windows/Linux matrix and retrieve outcomes and logs through the GitHub CLI. The
+Windows/Linux matrix and retrieve outcomes and **encrypted diagnostic logs** through the GitHub CLI. The
 repository contains the entire source project being compiled. **No private
 repositories are accessed or forwarded.**
 
@@ -15,14 +15,35 @@ With an authenticated `gh` CLI that has permission to trigger workflows in this
 repository, run:
 
 ```sh
+python3 tools/install_age.py
 python3 tools/pi_fixture_dispatch.py --left 17 --right -3 --show-logs
 ```
 
 The script triggers a workflow, finds the exact trace ID, waits for both Windows
-and Linux, retrieves the GitHub run/job conclusions, and optionally prints the
-public job logs. It records a small local status file in
+and Linux, retrieves the GitHub run/job conclusions and ciphertext artifacts,
+and decrypts them **only on the Pi** with age. `--show-logs` optionally prints
+decrypted output locally on the Pi. It verifies each runner's synthetic random
+canary is absent from publicly visible GitHub logs. It records a small status file in
 `.ci-relay-lab-last-run.json` (gitignored). GitHub-hosted workflows never receive
 Pi credentials, private source, private build artifacts, or unreviewed scripts.
+
+## Encryption key
+
+The public recipient key is `keys/pi-logs.agepub`, and the Pi-only identity is
+`/home/pi/.config/ci-relay-lab/identity.txt` (`0600`). The key was generated on
+the Pi with `age-keygen`; **the private identity is never copied to GitHub**.
+To create a new key for a new deployment, generate an age identity directly on
+the recipient host and commit only its public recipient key. Protect and back up
+the private key through an appropriate encrypted private mechanism; losing it
+means existing encrypted artifacts cannot be decrypted.
+
+The runner executes fixed, public C++ build/test commands with subprocess
+stdout/stderr captured in memory, then encrypts that stream with age. Even a
+deliberate failed test (exit 47) and randomized canary remain in ciphertext.
+After upload, the Pi downloads each platform's artifact and decrypts locally.
+GitHub still exposes job names, run status, workflow metadata and any output
+produced *outside* that capture wrapper. This proves the test wrapper works;
+it does **not** turn a public repository into secure private-build infrastructure.
 
 ## Security boundary
 
@@ -37,8 +58,9 @@ Pi credentials, private source, private build artifacts, or unreviewed scripts.
   privileged fine-grained token or GitHub App for any future unattended use.
 - The trigger is manual; no runner registration, polling daemon, systemd unit,
   webhook listener, GCS branch hook, or private CI workflow is installed.
-- Logs and run metadata in this test are **public**; never pass confidential
-  data, even if encrypted. Public-repo workflow results are also public.
+- GitHub runner/service output and metadata remain **public**; only the captured
+  subprocess diagnostics are encrypted. Anyone can download ciphertext artifacts.
+  Never pass confidential source/data, even when encrypting captured logs.
 
 ## Local checks
 
