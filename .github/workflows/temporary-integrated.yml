@@ -1,5 +1,5 @@
 name: Synthetic cross-platform CI
-run-name: fixture-test-af6975a05325
+run-name: fixture-test-f185c5cae0f1
 
 on:
   push:
@@ -28,15 +28,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Reject nonpublic source or unapproved workflow context
-        run: python -m tools.public_guard
+        run: python -m tools.public_guard --tree-only
       - name: Install checksum-verified age encryption utility
         run: python tools/install_age.py
       - name: Capture and encrypt all synthetic build/test output
         env:
-          TRACE_ID: test-af6975a05325
+          TRACE_ID: test-f185c5cae0f1
           LEFT: '17'
           RIGHT: '-3'
-          AGE_RECIPIENT: age17jjwnett2dsxfkmftjlw83fq6xkfndxljqulz8ceekftr2wkt9lsa2s6j7
+          AGE_RECIPIENT: age1av76ja78ka60wc22r0wgtg4sr4n4pq3476nuj38zlauckeesufsq5cf48r
         run: python -m tools.run_encrypted_fixture
       - name: Upload ciphertext only (never plaintext)
         if: always()
