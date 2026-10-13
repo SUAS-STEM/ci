@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -17,7 +18,6 @@ from .ephemeral_age import ephemeral_identity
 from .binary_envelope import unwrap_binary
 from .log_transport import parse_job_log
 from .check_fixture import parse_request
-from .pi_fixture_dispatch import check_decrypted_report_binding
 
 PUBLIC_REPO = "SUAS-STEM/ci-relay-lab"
 PRIVATE_REPO = "SUAS-STEM/ci-release-vault"
@@ -28,6 +28,16 @@ AGE = Path(__file__).resolve().parents[1] / ".age-bin" / "age"
 PLATFORMS = ("ubuntu-24.04", "windows-2025")
 ASSETS = {"ubuntu-24.04": "linux-x86_64-synthetic_adder",
           "windows-2025": "windows-x86_64-synthetic_adder.exe"}
+PRIVATE_SYNC = Path("/home/pi/ci-release-vault/tools/sync_private_release.py")
+
+
+def check_decrypted_report_binding(decrypted: str, trace_id: str, commit: str,
+                                   run_id: int, platform: str, recipient_digest: str) -> None:
+    """Reject replayed encrypted logs from another run, platform or recipient."""
+    expected = (f"trace={trace_id}\ncommit={commit}\nrun={run_id}\n"
+                f"platform={platform}\nrecipient_sha256={recipient_digest}\n")
+    if not decrypted.startswith(expected):
+        raise RuntimeError("Encrypted report belongs to a different run or recipient")
 
 
 def gh(*args):
@@ -141,8 +151,8 @@ def publish_from_logs(identity, trace: str, run_id: int, source_sha: str,
                 raise RuntimeError("Private GitHub release download mismatched original build")
         gh("release", "edit", tag, "--repo", PRIVATE_REPO,
            "--draft=false", "--latest=false")
-    # Protected private release retained. A separate tested command stores a
-    # permanent copy on Pi; do not delete the private GitHub Release.
+    # Protected private release remains as the durable origin. Keep a separate
+    # Pi copy for continuity and readback. Do not delete the private Release.
     print(f"PRIVATE_RELEASE_OK https://github.com/{PRIVATE_REPO}/releases/tag/{tag}", flush=True)
     return tag
 
@@ -186,6 +196,10 @@ def main():
                 break
             time.sleep(8)
         tag = publish_from_logs(identity, trace, run_id, source_sha)
+        if not PRIVATE_SYNC.is_file():
+            raise RuntimeError("Trusted Pi private-release mirroring tool unavailable")
+        subprocess.run([sys.executable, str(PRIVATE_SYNC), tag],
+                       check=True, timeout=180)
         print(f"Build and encrypted delivery succeeded: {tag}")
 
 

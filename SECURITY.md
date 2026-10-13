@@ -1,130 +1,34 @@
-# Public-only security boundary
+# Security model — public encrypted synthetic CI
 
-This repository and all of its Actions runs are **public**. The workflow builds
-only a pinned, publicly disclosed toy C++ program. It must **never** be used to
-compile, decrypt, package, test or transmit nonpublic or proprietary source.
+## What remains public
 
-## Allowed data
+The `SUAS-STEM/ci-relay-lab` source tree is public. Windows/Linux GitHub-hosted runners execute **only** the fixed synthetic source; the source allowlist and pinned toy program SHA-256 hashes in `tools/public_guard.py` enforce this. Workflow run metadata, job logs, build context, and the public encryption recipient are publicly visible. Public job logs contain ciphertext, not plaintext executable or synthetic diagnostic output.
 
-- Public toy program in `src/synthetic_adder.cpp` (checked by SHA-256)
-- Numeric operands from -9999 through 9999 and a harmless generated trace ID
-- A freshly generated, per-run **public** age recipient (never its secret identity)
-- age-encrypted diagnostic artifacts containing synthetic output only
+No public build receives source from a private repository, a release-writing credential, the age private key, or GitHub credentials from the Pi. The workflow has `contents: read` only and checkout is `persist-credentials: false`.
 
-## Barriers
+## Ciphertext transport (no Actions artifacts)
 
-- Only a manually dispatched `main` workflow in this exact public repository
-  is accepted, from the approved test dispatcher account.
-- No private repository checkout or credentials, SSH keys, GitHub App secrets,
-  arbitrary commands, source archives or external payloads.
-- An allowlist checks all committed paths. Unexpected files, symlinks,
-  oversized files or modifications to toy C++ source fail closed.
-- Build runners have read-only Actions tokens. A separate, tightly scoped
-  signer may write provenance and request GitHub OIDC identity only. All four
-  approved Actions and downloaded crypto binaries are pinned/verified;
-  artifact retention is 1 day and no caches are uploaded.
-- Compiler and test subprocess stdout/stderr are captured before encryption.
-  A random canary and deliberate error check that captured output doesn't
-  appear in public logs; the Pi verifies both encrypted reports and run SHA.
-- A **separate** attestation-only GitHub-hosted job obtains narrowly scoped
-  `id-token: write` and `attestations: write` permissions. Build jobs stay
-  read-only. The signer handles only ciphertext, not code, runner secrets or
-  Pi decryption keys.
-- GitHub OIDC/Sigstore signed attestations bind each ciphertext's SHA-256 digest
-  to the specific repository, signer workflow, main ref and source commit.
-  The Pi requires verification of all of those conditions before decryption;
-  absent, tampered or incorrectly signed artifacts fail closed.
-- The Pi downloads only two known artifact names and rejects any extra files,
-  missing artifact, incorrect size or unsupported ciphertext format.
-- **Local retention is indefinite.** After verified download and decryption,
-  the Pi writes both logs, available public toy compiled binaries, and a SHA-256 manifest to
-  `~/ci-artifacts/ci-relay-lab/run-ID/` with directories `0700`, files `0600`,
-  file and directory `fsync`, an atomic rename, and checksum readback. It
-  refuses symlinks, untrusted file ownership, unexpected files and overwrites.
-- Both public toy executables have separately signed encrypted payloads; their
-  decrypted envelopes bind run ID, commit, platform, recipient hash, payload
-  length and SHA-256. Failed builds are explicitly marked missing. Executables
-  are stored without execute permission and never run on the Pi.
-- Only after durable storage succeeds does the Pi delete the exact two
-  GitHub artifact IDs using its local CLI credentials. It confirms the IDs are
-  absent from the GitHub artifact listing. Incomplete deletion is retryable
-  with `tools/pi_artifact_cleanup.py RUN_ID`, without any private age key.
-- `tools/pi_artifact_cleanup.py --pending` finds verified archives whose
-  GitHub cleanup was interrupted and safely retries their deletion. It rejects
-  malformed cleanup receipts and corrupted local archives.
-- `python3 -m tools.pi_artifact_verify` audits permanent Pi archives using
-  bounded, streaming file hashes and detects corruption, incomplete staging
-  directories, and missing GitHub cleanup receipts. It never executes binaries.
-- The Pi retrieves each artifact ZIP from GitHub's API, verifies the exact
-  published ZIP SHA-256 and byte count, then inspects it using a bounded ZIP
-  parser. Only the two exact files `encrypted-log.age` and
-  `encrypted-binary.age` are accepted; traversal
-  paths, additional files, symlinks, invalid sizes, and oversized expanded
-  content are rejected before extracting the ciphertext.
-- Every dispatch receives a **different** X25519 recipient private key generated
-  directly into a sealed Linux memfd. Only that recipient's public key is sent
-  to GitHub. The Pi checks the recipient digest inside decrypted run metadata;
-  a different run's artifact or key is rejected.
+Each Pi-triggered run generates an ephemeral X25519 `age` identity in a sealed anonymous Linux memfd. Best-effort memory locking, non-dumpable process state, and disabled core dumps reduce trivial private-key exposure; these do not make a compromised kernel or root attacker harmless. The Pi sends **only** the public recipient to the public workflow.
 
-## What encryption **does not** protect
+The fixed job encrypts its captured diagnostic output and compiled toy executable to that recipient, then prints two base64-wrapped `age` ciphertext records to the GitHub job log. The envelope includes SHA-256 for truncation/corruption detection and limits size. The private Pi identity is never sent to GitHub. The runner can see the toy source and plaintext build output *before encryption*.
 
-Actions metadata, runner bootstrapping, unexpected stderr from tools executed
-outside the capture wrapper, branch changes, files supplied to the runner,
-dependencies and network exfiltration are outside log encryption. A malicious
-actor with write access can alter the workflow or public code. The runner may
-read any plaintext source delivered to it. No public GitHub-hosted workflow is
-a confidentiality boundary for proprietary code.
+The Pi independently retrieves both raw job logs from GitHub, checks run origin and actor, branch, commit, exact two successful OS jobs, exact ciphertext headers/hashes, and decryption. Decrypted payloads are checked against the run ID, source SHA, trace, recipient digest, platform, canary uniqueness and expected synthetic success. The Pi also scans the public job logs for unexpected plaintext test canaries.
 
-The Pi's personal GitHub CLI currently has broad permissions: never expose it
-to GitHub-hosted workflows. For unattended CI, replace that credential with a
-fine-grained identity scoped exclusively to this public toy test repository.
+The public runner does **not** upload Actions artifacts; the private Release is published *from the Pi* only. A finished private Release is downloaded again and SHA-256-verified, then durably archived on Pi via the private repo's mirror utility. GitHub Release assets are normal private-repository assets and are visible to authorized private repository users; this is not end-to-end encryption against those users.
 
-GitHub's Actions Terms also restrict unrelated private build workloads on
-GitHub-hosted runners in public repositories. If private software must actually
-be built, use trusted isolated compute with private logs; a public web-visible
-dashboard may safely display coarse non-sensitive status only.
+## Controls and residual risks
 
-## Artifact security properties
+- The built-in public `GITHUB_TOKEN` has read-only permission, and no Pi token or release-writer permission is available to public runners. The private-release writer remains on the Pi. A dedicated repository-scoped GitHub App token should replace the Pi's broad personal token for unattended production operation.
+- Source confidentiality cannot be achieved if proprietary GCS code is built on a public GitHub-hosted runner, even if GitHub Release publication is private. Use a trusted private execution environment for such builds.
+- Ciphertext transport in **public** workflow logs means those encrypted bytes may be retained under GitHub's log-retention policy. No Actions artifacts are created; GitHub run logs are a separate storage class.
+- If the Pi or dispatcher dies before decrypting a run, its one-time age identity is lost. Rerun CI with a new key; ciphertext logs alone cannot restore the key.
+- Encryption and SHA-256 detect ciphertext corruption but do **not independently attest runner honesty**. The GitHub-run/job identity and pinned toy source provide context. Future confidential build systems should use signed provenance with a durable offline-verifiable trust root.
+- The private repository's exact-release verifier checks tag, source run/commit, workflow, job outcome, asset count and SHA-256. GitHub administrators with sufficient write access can still mutate tags and releases; plan for immutable external signed attestations.
+- The Pi archive currently has Unix file permissions, not disk-level encryption or an independent offsite backup. A stolen SSD or compromised privileged account can expose its plaintext private-release assets.
+- The public fixture contains a deliberately generated, random synthetic canary to test accidental plaintext logging; it does not use proprietary secrets.
 
-- Confidentiality uses age v1 with X25519 ephemeral key agreement,
-  ChaCha20-Poly1305 streaming AEAD, and HKDF-SHA-256. Its file key is randomly
-  generated for every artifact. No passwords or public Actions secrets are used.
-- Modified, truncated, or incorrectly keyed ciphertext fails authenticated
-  decryption. The `age` public recipient is **not** a sender signature: anyone
-  with it can encrypt arbitrary plaintext.
-- Signed Sigstore build provenance adds *sender/workflow identity*, not secrecy.
-  A compromised trusted workflow could still attest malicious output. Signed
-  provenance also cannot prevent the hosted runner from reading toy source.
-- Ciphertext ZIP artifacts and signed provenance are publicly retrievable.
-  Ciphertext uploads use 1-day fallback retention but are deleted after
-  verified transfer. GitHub Actions logs, run metadata and Sigstore provenance
-  are separate public records that artifact deletion does not erase.
-- Local verified diagnostic files are stored in plaintext on the Pi's SSD.
-  Their Unix permissions do not provide at-rest encryption against disk theft,
-  malware, or privileged local users. Use full-disk encryption or an encrypted
-  dedicated volume if real confidential artifacts are stored on trusted compute.
-- **Optional offline-key Pi archive mode** (`archive-recipient.agepub`) re-encrypts
-  verified logs and binaries under a separate `age` public recipient, retaining
-  only ciphertext on the SSD. The recovery private identity must remain on a
-  different machine. If the public-key configuration is invalid, archive
-  creation fails closed; GitHub transfers are not deleted. A manifest schema-3
-  archive records ciphertext hashes so GitHub cleanup can complete without the
-  private recovery key. Existing plaintext archives are not migrated.
-- After the recovery recipient is installed, running
-  `python3 tools/pi_archive_config.py --require-encryption` writes a private
-  fail-closed policy marker. If the public recipient later disappears, the Pi
-  refuses new plaintext archives instead of silently downgrading security.
-  Encryption is *not currently enabled* without that offline recipient.
-- The Pi currently has an unencrypted ext4 root volume and disk-backed swap;
-  optional archive encryption is not a substitute for encrypted swap or FDE.
-  Plaintext may remain in process memory/swap while a live CI run is decrypted.
-- Each run's private identity lives in anonymous Pi kernel memory, which is
-  closed after the dispatcher exits. Old ciphertext cannot be read with a
-  later run's key. The Pi locks the identity's memory pages against swap,
-  disables process core dumps and disables ordinary same-UID ptrace/procfs
-  inspection while the dispatcher is running. If those protections are not
-  available, dispatch fails closed. Interrupting the Pi dispatcher irrecoverably
-  loses the key. This is not a hardware boundary: privileged Pi/root access,
-  malicious kernel modules and compromised child processes remain risks.
-  Older **synthetic-only** test runs used a persistent identity, now deleted
-  from the Pi. Those historical test artifacts can no longer be decrypted.
+## Source and release review
+
+The approved public CI workflow is manual, `main`-only, and restricted to the approved actor. The repository's protected `main` requires an independent reviewer and the `public-source-gate` check. The one-off temporary integration workflow used during the live proof has been removed; do not re-enable it.
+
+The previous artifact-ZIP upload and signer job were **retired** in favor of ciphertext-in-job-log transport plus Pi-controlled private Releases. Do not assume Sigstore attestations from the retired workflow apply to the new mechanism. Separate signed provenance remains future work.

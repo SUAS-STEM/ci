@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from tools.ephemeral_age import ephemeral_identity, is_age_recipient
-from tools.pi_fixture_dispatch import check_decrypted_report_binding
+from tools.pi_public_release import check_decrypted_report_binding
 
 
 @unittest.skipUnless(sys.platform.startswith("linux") and hasattr(os, "memfd_create"),

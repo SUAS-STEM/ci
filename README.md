@@ -1,181 +1,46 @@
-# CI Relay Lab (public, synthetic only)
+# Encrypted public CI relay (synthetic only)
 
-Public CI experiment for a **public toy C++ project**. A Raspberry Pi can trigger a
-Windows/Linux matrix and retrieve outcomes and **encrypted diagnostic logs** through the GitHub CLI. The
-repository contains the entire source project being compiled. **No private
-repositories are accessed or forwarded.**
+This is the **PUBLIC test repository** for the encrypted Windows/Linux CI transport. Only a pinned, harmless C++ sample is compiled here. A trusted Raspberry Pi holds each one-time decryption key, retrieves encrypted job logs, verifies build identity and contents, and uploads the compiled outputs directly to a **PRIVATE GitHub Release** at [SUAS-STEM/ci-release-vault](https://github.com/SUAS-STEM/ci-release-vault).
 
-This is intentionally *not* a free-minutes bridge for private GCS builds. GitHub's
-Actions Terms prohibit GitHub-hosted runner workloads unrelated to the software
-project in the public repository.
+**No GitHub Actions artifacts are created or downloaded.** GitHub public workflow logs contain *only age ciphertext* for the test output. The Pi uploads the verified Linux and Windows executables, with checksum sidecars, straight to the private Release. It then synchronizes that private release to its own permanent storage.
 
-## Synthetic end-to-end test on the Pi
+The earlier artifact ZIP upload/download, GitHub artifact deletion, and long-term artifact-store code have been removed. The historical Pi archives under `~/ci-artifacts/ci-relay-lab/` are unchanged, but no new runs use that path.
 
-With an authenticated `gh` CLI that has permission to trigger workflows in this
-repository, run:
+## Operating flow
+
+1. Run `python3 tools/install_age.py` on the Pi to install the pinned, checksum-verified `age` binary.
+2. From this repository's **approved `main` branch**, run `python3 -m tools.pi_public_release --left 17 --right -3`.
+3. The Pi creates a unique X25519 age keypair in anonymous RAM-backed Linux `memfd`. It dispatches `.github/workflows/fixture.yml` with a random trace, two validated numbers, and the *public* age recipient. Only the fixed synthetic source is built by Windows and Linux hosted runners.
+4. Runner output is captured and encrypted to the Pi's public key. Two ciphertext strings (log and binary) appear in each public job log as `CI_RELAY_ENCRYPTED_V1` records. No plaintext test canaries or build output should appear in public logs.
+5. The Pi verifies that both GitHub jobs completed successfully, that the run's commit, workflow, actor, branch, run ID, recipient, platform, and synthetic canaries match, and then decrypts both reports locally.
+6. **On the Pi only**, the verified binaries are uploaded to a private **draft** GitHub Release; both are downloaded and SHA-256 checked before publication. The final private release retains all four assets. The Pi then mirrors it using `/home/pi/ci-release-vault/tools/sync_private_release.py` under `~/ci-artifacts/private-releases/<tag>/`, with private permissions and durable filesystem operations.
+
+The private Release is the canonical published output and is **not deleted** after download. The Pi keeps its own local copy indefinitely. GitHub job logs and workflow history may remain on the public repo, but they are *not* Actions artifacts.
+
+## Verified public integration
+
+A full encrypted public Windows/Linux run, Pi decryption, private GitHub Release publication, and durable Pi mirror passed in [public test run 38454705459](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38454705459). The corresponding [private test release](https://github.com/SUAS-STEM/ci-release-vault/releases/tag/ci-public-test-38454705459-1) contains the two real synthetic executables plus checksum files. The public and private repositories reported **zero Actions artifacts**.
+
+The above run was a **one-time feature-branch proof**. Its temporary push-triggered workflow was removed after the test, and the production version of `fixture.yml` remains manual/dispatch-only on protected `main`. A successful feature-branch proof does not mean the new workflow has been deployed to `main`: independent PR review and merge are still required. The retired workflow on `main` remains disabled until the replacement has been approved.
+
+## Security boundaries and limitations
+
+- **This is not a mechanism to compile proprietary GCS source in public Actions.** Encrypting output or encrypting a source archive cannot keep the source secret from a runner that executes it. Public runners see this repository's harmless pinned C++ toy source only. Private GCS needs a trusted private build environment.
+- The one-time age *private* key stays on the Pi in anonymous memory. If the Pi crashes before fetching/decrypting, the job must be rerun with a fresh key; it is not recoverable from GitHub.
+- A public ciphertext record can be seen by anybody with access to the public workflow logs. The one-time secret key remains private to the Pi. Once plaintext executables are published in a **private** Release, any authorized member of that private repo can download them.
+- The Pi's `gh` credential is used to publish privately. **Never place its personal token on a public runner or in workflow inputs.** Use a short-lived, repository-scoped publishing identity before production automation.
+- SHA-256, GitHub job identity checks, and age authentication are not the same as durable independent source provenance. For high-assurance use, add signed attestations and preserve verification evidence with releases.
+- Pi at-rest storage is not encrypted. Set up an encrypted storage volume before using confidential release contents. Back up any important private releases independently.
+- The fixed public fixture never reads, clones, or forwards a private repository. The public-source safety gate and pinned toy-source hashes reject accidental additional code.
+
+## Tests
 
 ```sh
 python3 tools/install_age.py
-python3 tools/pi_fixture_dispatch.py --left 17 --right -3 --show-logs
+python3 -m unittest discover -s tests -q
+python3 -m tools.public_guard --tree-only
 ```
 
-The script triggers a workflow, finds the exact trace ID, waits for both Windows
-and Linux, retrieves the GitHub run/job conclusions and ciphertext artifacts,
-and decrypts them **only on the Pi** with age. **The Pi is the permanent artifact
-store**: verified synthetic build diagnostics are saved under
-`~/ci-artifacts/ci-relay-lab/run-<GitHub-run-ID>/` as two `.log` files,
-the actual public synthetic Linux and Windows compiled executables, and a
-SHA-256 manifest. The directory is `0700` and each file is `0600`.
-Compiled files are named `ubuntu-24.04.bin` and `windows-2025.exe` and stored
-non-executable on the Pi; a failed build is recorded with a missing binary.
-All files and directory entries are fsync'd, atomically committed and read back
-before either temporary GitHub Actions ciphertext artifact is deleted through
-the GitHub API. Artifacts are uploaded with 1-day retention as a fallback, but
-are deleted as soon as durable Pi transfer and validation complete. No automatic
-expiration is applied to Pi files.
+The required PR check runs the Python security tests on Linux. The actual encrypted Windows/Linux build and Pi-to-private-Release integration has separately been tested end to end.
 
-`--show-logs` optionally prints decrypted output locally on the Pi. The tool
-verifies each runner's synthetic random canary is absent from publicly visible
-GitHub logs. It records a small status file in
-`.ci-relay-lab-last-run.json` (gitignored). GitHub-hosted workflows never receive
-Pi credentials, private source, private build artifacts, or unreviewed scripts.
-
-If the Pi crashes **after** the local archive is committed but **before** GitHub
-deletion, run `python3 tools/pi_artifact_cleanup.py RUN_ID` later. This checks
-the complete local archive and exact GitHub artifact IDs before deleting the
-two remote copies; the one-time decryption key is not required for cleanup.
-If the Pi crashes *before* the local archive is committed, the key is lost and
-the synthetic CI job must be rerun. A failed GitHub deletion never removes the
-durable Pi files. Deleting uploaded artifacts does **not** erase public Actions
-job logs, run records, or Sigstore provenance attestations.
-
-`python3 tools/pi_artifact_cleanup.py --pending` verifies and retries any
-previously saved runs whose GitHub cleanup was interrupted. It is safe to run
-after reboot without the original ephemeral decryption key. It is not installed
-as an unattended service until the protected PR is reviewed and merged.
-
-To audit retained Pi files for corruption, unexpected size changes, interrupted
-staging directories, and pending GitHub cleanup, run
-`python3 -m tools.pi_artifact_verify`. This reads files in bounded chunks,
-does not contact GitHub, and does not execute, delete, or modify artifacts.
-
-### Optional permanent encryption at rest
-
-The Pi can also store **every log and synthetic executable as a second `age`
-ciphertext** (`*.log.age`, `*.bin.age`, `*.exe.age`) rather than as plaintext.
-Create a long-term `age` recovery identity on a separate, trusted machine, and
-keep its **private** identity *off the Pi*. Transfer **only its public `age1…`
-recipient** into the file
-`~/.config/ci-relay-lab/archive-recipient.agepub` on the Pi, with mode `0600`.
-Once that valid file exists, future runs automatically use encrypted permanent
-archives (manifest schema 3); no fallback to plaintext occurs if encryption
-fails or the public-key file has unsafe permissions.
-
-An example public-key-only Pi installation (replace the placeholder with your
-own actual `age` public recipient):
-
-```sh
-install -d -m 700 ~/.config/ci-relay-lab
-printf '%s\n' 'age1YOUR_OFFLINE_RECOVERY_PUBLIC_KEY' > ~/.config/ci-relay-lab/archive-recipient.agepub
-chmod 600 ~/.config/ci-relay-lab/archive-recipient.agepub
-# Once the OFFLINE recovery key is backed up safely, make encryption mandatory:
-python3 tools/pi_archive_config.py --require-encryption
-```
-
-The last command creates a protected fail-closed policy marker. Once enabled,
-future archival **refuses to write plaintext** if the configured public
-recipient disappears, has the wrong permissions, or is malformed. The key
-must be restored before dispatch can continue. This does not protect against
-someone with administrative access deliberately removing both configuration
-files or altering the running code. The live Pi does **not** have an offline
-recovery recipient configured yet, so its current archives remain plaintext.
-
-The placeholder is deliberately invalid. Do not create the recovery private
-key on the Pi, paste it into a GitHub secret, or commit it anywhere. If the
-offline recovery private key is lost, encrypted permanent artifacts are also
-lost. To decrypt an archived file later, use the `age` program with that
-private identity on your trusted recovery computer. The Pi can still audit
-stored ciphertext and delete GitHub transfers without accessing the private
-recovery key. Existing unencrypted archives are **not** silently migrated.
-
-This protects stored files against a stolen Pi SSD without the off-device
-recovery key, but not against a live compromised Pi while builds are being
-decrypted, unencrypted swap, or any plaintext history written before enabling
-the option. It is not full-disk encryption.
-
-This prototype's archived artifacts are **public toy builds and diagnostics**,
-not compiled GCS binaries; the toy repository does not build proprietary GCS artifacts. Long-term
-confidential output on the Pi would additionally need encrypted storage and a
-trusted private execution environment.
-
-## Encryption key
-
-**Every run gets a new public/private age keypair.** The Pi runs `age-keygen`
-directly into a sealed Linux anonymous `memfd` (no named private-key file and
-no Python plaintext copy of the private key). Only the corresponding *public*
-recipient travels to GitHub as a workflow input. Two CI workers encrypt their
-independent output artifacts to the same one-run recipient. On the Pi, the
-private key's descriptor is inherited by only the `age` decryption subprocess;
-its memory pages are locked against swap, and the Pi disables ordinary process
-inspection and core dumps. The descriptor is closed after verification.
-Previous artifacts cannot be decrypted after
-that key is discarded. **If the dispatcher process dies, that run's logs are
-permanently unavailable; restart a fresh run.**
-
-The unused legacy persistent identity from early synthetic-only tests was
-deleted from the Pi; those old test artifacts are no longer decryptable.
-Privileged kernel/root access and compromised processes remain threats; this
-is not hardware-backed key protection.
-
-The runner executes fixed, public C++ build/test commands with subprocess
-stdout/stderr captured in memory, then encrypts that stream with age. Even a
-deliberate failed test (exit 47) and randomized canary remain in ciphertext.
-Build/test subprocesses receive a sanitized environment that excludes
-runner tokens and credential-like variables while preserving compiler discovery
-metadata needed by Windows CMake. This filter is defense in depth, not isolation.
-After upload, the Pi downloads each platform's artifact and decrypts locally.
-An independent attestation-only job signs a SHA-256 hash of each encrypted file
-using GitHub's short-lived OIDC/Sigstore identity. The Pi verifies each signed
-artifact against the expected GitHub repository, workflow, branch and exact
-commit **before** it decrypts anything. The build jobs retain read-only
-permissions; only the separate signing job has attestation permissions.
-The Pi also verifies each downloaded ZIP's exact GitHub-published SHA-256
-before inspecting its single expected ciphertext file. No arbitrary archive
-filenames are extracted into the filesystem.
-GitHub still exposes job names, run status, workflow metadata and any output
-produced *outside* that capture wrapper. This proves the test wrapper works;
-it does **not** turn a public repository into secure private-build infrastructure.
-
-## Security boundary
-
-- Workflow inputs are a random trace ID and two constrained integers; no files,
-  arbitrary commands, source archives, repository identifiers, or secrets. A
-  one-run **public** age recipient is also sent for encrypted logs.
-- The compiled program is tracked **in this public repository**. Dispatch cannot
-  change which code is compiled.
-- Build workflow tokens have read-only contents permissions; the dedicated
-  signing job has tightly scoped attestations/OIDC permissions. Checkout
-  doesn't persist credentials, and there are no repository secrets or caches.
-- The GitHub CLI authentication remains on the Pi. Whoever controls that account
-  could still trigger workflows or edit the public repository; use a minimally
-  privileged fine-grained token or GitHub App for any future unattended use.
-- The Pi checks that local HEAD, remote `main`, and actual workflow run commit
-  all match. It rejects mismatched runs and verifies encrypted report metadata
-  contains the exact run ID, platform, commit **and one-run recipient digest**
-  before accepting diagnostics. Artifacts cannot be replayed between runs.
-- Only the four SHA-pinned GitHub actions in these workflows are permitted by
-  the repository Actions policy. Action SHA pinning is required in GitHub settings.
-- Secret scanning and push protection are enabled for this public repository.
-- The trigger is manual; no runner registration, polling daemon, systemd unit,
-  webhook listener, GCS branch hook, or private CI workflow is installed.
-- GitHub runner/service output and metadata remain **public**; only the captured
-  subprocess diagnostics are encrypted. Anyone can download ciphertext artifacts.
-  Never pass confidential source/data, even when encrypting captured logs.
-
-## Local checks
-
-```sh
-python3 -m unittest discover -s tests -v
-cmake -S . -B build && cmake --build build --parallel 2
-ctest --test-dir build --output-on-failure
-```
+For private release verification, checksum readback, and long-term Pi mirroring, see `SUAS-STEM/ci-release-vault`. That repository also contains a separate, **currently billing-blocked**, private-hosted synthetic build demo which is not used by this public CI relay.

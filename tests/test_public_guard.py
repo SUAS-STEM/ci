@@ -6,6 +6,21 @@ from tools import public_guard
 
 
 class PublicGuardTest(unittest.TestCase):
+    def test_ci_workflow_uses_no_actions_artifact_storage(self):
+        workflow = (public_guard.ROOT / ".github/workflows/fixture.yml").read_text()
+        for forbidden in ("actions/upload-artifact", "actions/download-artifact",
+                          "upload-artifact@", "download-artifact@",
+                          "gh run download", "gh api repos/", "artifact-metadata: write"):
+            self.assertNotIn(forbidden, workflow)
+        self.assertIn("python -m tools.log_transport", workflow)
+        self.assertIn("contents: read", workflow)
+
+    def test_public_runner_never_gets_private_release_writer(self):
+        workflow = (public_guard.ROOT / ".github/workflows/fixture.yml").read_text()
+        for forbidden in ("GH_TOKEN:", "secrets.", "contents: write",
+                          "SUAS-STEM/ci-release-vault", "gh release upload"):
+            self.assertNotIn(forbidden, workflow)
+
     def test_current_public_tree_passes(self):
         public_guard.check_tree(public_guard.ROOT)
 
