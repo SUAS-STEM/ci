@@ -15,7 +15,6 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_FILES = frozenset({
     ".github/workflows/fixture.yml",
-    ".github/workflows/ephemeral-matrix-smoke.yml",
     ".github/workflows/security-review.yml",
     ".gitignore",
     "CMakeLists.txt",
@@ -30,7 +29,6 @@ ALLOWED_FILES = frozenset({
     "tools/artifact_verification.py",
     "tools/install_age.py",
     "tools/ephemeral_age.py",
-    "tools/ephemeral_branch_smoke.py",
     "tools/pi_fixture_dispatch.py",
     "tools/public_guard.py",
     "tools/run_encrypted_fixture.py",
