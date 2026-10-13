@@ -97,7 +97,7 @@ def validate_run_details(details: dict, expected_sha: str) -> None:
 
 
 def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
-                          expected_sha: str) -> dict[str, str]:
+                          expected_sha: str, job_conclusions: dict) -> dict[str, str]:
     if not AGE_EXE.is_file():
         raise RuntimeError("Pi-only decryption identity or age utility is unavailable")
     verify_local_key()
@@ -118,11 +118,12 @@ def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
             header = f"trace={trace_id}\ncommit={expected_sha}\nrun={run_id}\nplatform={platform}\n"
             if not decrypted.startswith(header):
                 raise RuntimeError(f"Encrypted report provenance mismatch for {platform}")
-            if f"PASS trace={trace_id}" not in decrypted:
-                raise RuntimeError(f"Synthetic binary result missing from {platform}")
+            if job_conclusions.get(platform) == "success" and f"PASS trace={trace_id}" not in decrypted:
+                raise RuntimeError(f"Successful job missing synthetic result: {platform}")
             if "=== Expected diagnostic failure (privacy test) (exit=47; expected=47) ===" not in decrypted:
                 raise RuntimeError(f"Expected synthetic failure not captured for {platform}")
-            if len(re.findall(r"SYNTHETIC_CANARY_[0-9a-f]{40}", decrypted)) != 2:
+            canaries = re.findall(r"SYNTHETIC_CANARY_[0-9a-f]{40}", decrypted)
+            if len(canaries) != 2 or canaries[0] != canaries[1]:
                 raise RuntimeError(f"Encrypted canary invalid for {platform}")
             private_logs[platform] = decrypted
 
@@ -210,8 +211,10 @@ def main() -> int:
     print(json.dumps(result, indent=2), flush=True)
 
     if details.get("status") == "completed":
-        result["encrypted_logs"] = retrieve_private_logs(run_id, trace_id, args.show_logs,
-                                                          remote_sha)
+        result["encrypted_logs"] = retrieve_private_logs(
+            run_id, trace_id, args.show_logs, remote_sha,
+            {job["name"]: job.get("conclusion") for job in details["jobs"]},
+        )
         write_status(result)
 
     if details.get("status") != "completed":

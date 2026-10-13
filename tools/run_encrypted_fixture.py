@@ -85,7 +85,12 @@ def main() -> int:
         raise RuntimeError("Unrecognized GitHub runner context")
     chunks.append(f"trace={trace}\ncommit={sha}\nrun={run_id}\nplatform={platform_name}\ncanary={canary}\n".encode())
     capture("Python input validation", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"])
-    capture("CMake configure", ["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"])
+    configure = ["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"]
+    if os.name == "nt":
+        # Explicit generator avoids inheriting a Visual Studio developer-shell
+        # environment (including its privileged, unrelated variables).
+        configure.extend(["-G", "Visual Studio 17 2022", "-A", "x64"])
+    capture("CMake configure", configure)
     capture("C++ compile", ["cmake", "--build", "build", "--config", "Release", "--parallel", "2"])
     capture("CTest", ["ctest", "--test-dir", "build", "-C", "Release", "--output-on-failure"])
     env = dict(base_env)
