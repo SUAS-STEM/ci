@@ -32,9 +32,8 @@ def main() -> None:
     filename, expected = ARCHIVES[(platform.system(), platform.machine())]
     destination = Path(__file__).resolve().parents[1] / ".age-bin"
     executable = "age.exe" if platform.system() == "Windows" else "age"
-    if (destination / executable).is_file():
-        print("Pinned age binary already installed locally")
-        return
+    # Intentionally verify the *release archive* on every invocation. Never
+    # trust an old executable merely because a matching filename exists.
     url = f"https://github.com/FiloSottile/age/releases/download/{VERSION}/{filename}"
     with urllib.request.urlopen(url, timeout=90) as stream:
         content = stream.read(30 * 1024 * 1024 + 1)
@@ -61,9 +60,11 @@ def main() -> None:
                     raise ValueError(f"Expected precisely one {target}")
                 binary = archive.extractfile(candidates[0]).read()
         path = destination / target
-        path.write_bytes(binary)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_bytes(binary)
         if os.name != "nt":
-            path.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+            tmp.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        tmp.replace(path)
     print(f"Installed verified age {VERSION} binaries")
 
 

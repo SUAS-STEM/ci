@@ -40,6 +40,8 @@ means existing encrypted artifacts cannot be decrypted.
 The runner executes fixed, public C++ build/test commands with subprocess
 stdout/stderr captured in memory, then encrypts that stream with age. Even a
 deliberate failed test (exit 47) and randomized canary remain in ciphertext.
+Build/test subprocesses receive a minimal allowlisted environment, excluding
+the runner's `GITHUB_TOKEN`, `ACTIONS_RUNTIME_TOKEN`, and unrelated variables.
 After upload, the Pi downloads each platform's artifact and decrypts locally.
 GitHub still exposes job names, run status, workflow metadata and any output
 produced *outside* that capture wrapper. This proves the test wrapper works;
@@ -56,6 +58,12 @@ it does **not** turn a public repository into secure private-build infrastructur
 - The GitHub CLI authentication remains on the Pi. Whoever controls that account
   could still trigger workflows or edit the public repository; use a minimally
   privileged fine-grained token or GitHub App for any future unattended use.
+- The Pi checks that local HEAD, remote `main`, and actual workflow run commit
+  all match. It rejects mismatched runs and verifies encrypted report metadata
+  contains the exact run ID, platform and commit before accepting diagnostics.
+- Only the two SHA-pinned GitHub actions in this workflow are permitted by the
+  repository Actions policy. Action SHA pinning is required in GitHub settings.
+- Secret scanning and push protection are enabled for this public repository.
 - The trigger is manual; no runner registration, polling daemon, systemd unit,
   webhook listener, GCS branch hook, or private CI workflow is installed.
 - GitHub runner/service output and metadata remain **public**; only the captured
