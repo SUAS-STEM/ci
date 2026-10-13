@@ -21,11 +21,35 @@ python3 tools/pi_fixture_dispatch.py --left 17 --right -3 --show-logs
 
 The script triggers a workflow, finds the exact trace ID, waits for both Windows
 and Linux, retrieves the GitHub run/job conclusions and ciphertext artifacts,
-and decrypts them **only on the Pi** with age. `--show-logs` optionally prints
-decrypted output locally on the Pi. It verifies each runner's synthetic random
-canary is absent from publicly visible GitHub logs. It records a small status file in
+and decrypts them **only on the Pi** with age. **The Pi is the permanent artifact
+store**: verified synthetic build diagnostics are saved under
+`~/ci-artifacts/ci-relay-lab/run-<GitHub-run-ID>/` as two `.log` files and a
+SHA-256 manifest. The directory is `0700` and each file is `0600`.
+All files and directory entries are fsync'd, atomically committed and read back
+before either temporary GitHub Actions ciphertext artifact is deleted through
+the GitHub API. Artifacts are uploaded with 1-day retention as a fallback, but
+are deleted as soon as durable Pi transfer and validation complete. No automatic
+expiration is applied to Pi files.
+
+`--show-logs` optionally prints decrypted output locally on the Pi. The tool
+verifies each runner's synthetic random canary is absent from publicly visible
+GitHub logs. It records a small status file in
 `.ci-relay-lab-last-run.json` (gitignored). GitHub-hosted workflows never receive
 Pi credentials, private source, private build artifacts, or unreviewed scripts.
+
+If the Pi crashes **after** the local archive is committed but **before** GitHub
+deletion, run `python3 tools/pi_artifact_cleanup.py RUN_ID` later. This checks
+the complete local archive and exact GitHub artifact IDs before deleting the
+two remote copies; the one-time decryption key is not required for cleanup.
+If the Pi crashes *before* the local archive is committed, the key is lost and
+the synthetic CI job must be rerun. A failed GitHub deletion never removes the
+durable Pi files. Deleting uploaded artifacts does **not** erase public Actions
+job logs, run records, or Sigstore provenance attestations.
+
+This prototype's archived artifacts are **diagnostic logs**, not compiled GCS
+binaries; the toy repository does not build proprietary GCS artifacts. Long-term
+confidential output on the Pi would additionally need encrypted storage and a
+trusted private execution environment.
 
 ## Encryption key
 

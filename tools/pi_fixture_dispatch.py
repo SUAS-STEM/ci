@@ -19,11 +19,15 @@ try:
     from .artifact_verification import (validate_catalog, verify_signed_ciphertext,
                                         extract_ciphertext_zip)
     from .ephemeral_age import ephemeral_identity, EphemeralIdentity
+    from .pi_artifact_store import ARCHIVE_ROOT, archive_run
+    from .pi_artifact_cleanup import cleanup_github_artifacts
 except ImportError:
     from check_fixture import parse_request
     from artifact_verification import (validate_catalog, verify_signed_ciphertext,
                                        extract_ciphertext_zip)
     from ephemeral_age import ephemeral_identity, EphemeralIdentity
+    from pi_artifact_store import ARCHIVE_ROOT, archive_run
+    from pi_artifact_cleanup import cleanup_github_artifacts
 
 
 REPO = "SUAS-STEM/ci-relay-lab"
@@ -151,11 +155,30 @@ def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
                 raise RuntimeError(f"PLAINTEXT FOUND IN PUBLIC WORKFLOW LOGS ({platform})")
         print("Verified synthetic canaries and test output are absent from public logs")
 
+        # Pi is the *permanent* source of truth. Persist both complete logs,
+        # fsync, rename atomically, and independently verify local checksums
+        # while the single-use decryption key is still alive.
+        artifact_ids = {
+            platform: next(item["id"] for item in catalog["artifacts"]
+                           if item["name"] == f"encrypted-diagnostics-{platform}")
+            for platform in PLATFORMS
+        }
+        destination = archive_run(ARCHIVE_ROOT, run_id, trace_id, expected_sha,
+                                  identity.recipient_digest, private_logs,
+                                  artifact_ids)
+        print(f"Verified long-term Pi copy: {destination}", flush=True)
+
+        # Deletion only happens after durable storage succeeded. On an API
+        # failure, keep local data and retain the remote artifacts; retry via
+        # tools/pi_artifact_cleanup.py RUN_ID without needing the erased key.
+        cleanup_github_artifacts(gh, ARCHIVE_ROOT, run_id)
+        print("Verified both temporary GitHub artifacts were deleted", flush=True)
+
         if show:
             for platform, body in private_logs.items():
                 print(f"\n--- Decrypted {platform} log (Pi only) ---\n{body}")
-        return {platform: "decrypted and no public-canary leak detected"
-                for platform in private_logs}
+        return {"pi_archive": str(destination), "github_artifacts_deleted": True,
+                "platforms": list(private_logs)}
 
 
 def main() -> int:

@@ -36,6 +36,15 @@ compile, decrypt, package, test or transmit nonpublic or proprietary source.
   absent, tampered or incorrectly signed artifacts fail closed.
 - The Pi downloads only two known artifact names and rejects any extra files,
   missing artifact, incorrect size or unsupported ciphertext format.
+- **Local retention is indefinite.** After verified download and decryption,
+  the Pi writes both logs and a SHA-256 manifest to
+  `~/ci-artifacts/ci-relay-lab/run-ID/` with directories `0700`, files `0600`,
+  file and directory `fsync`, an atomic rename, and checksum readback. It
+  refuses symlinks, untrusted file ownership, unexpected files and overwrites.
+- Only after durable storage succeeds does the Pi delete the exact two
+  GitHub artifact IDs using its local CLI credentials. It confirms the IDs are
+  absent from the GitHub artifact listing. Incomplete deletion is retryable
+  with `tools/pi_artifact_cleanup.py RUN_ID`, without any private age key.
 - The Pi retrieves each artifact ZIP from GitHub's API, verifies the exact
   published ZIP SHA-256 and byte count, then inspects it using a bounded ZIP
   parser. Only the single `encrypted-log.age` file is accepted; traversal
@@ -76,7 +85,13 @@ dashboard may safely display coarse non-sensitive status only.
   A compromised trusted workflow could still attest malicious output. Signed
   provenance also cannot prevent the hosted runner from reading toy source.
 - Ciphertext ZIP artifacts and signed provenance are publicly retrievable.
-  Their 1-day retention is for data minimization, **not** confidentiality.
+  Ciphertext uploads use 1-day fallback retention but are deleted after
+  verified transfer. GitHub Actions logs, run metadata and Sigstore provenance
+  are separate public records that artifact deletion does not erase.
+- Local verified diagnostic files are stored in plaintext on the Pi's SSD.
+  Their Unix permissions do not provide at-rest encryption against disk theft,
+  malware, or privileged local users. Use full-disk encryption or an encrypted
+  dedicated volume if real confidential artifacts are stored on trusted compute.
 - Each run's private identity lives in anonymous Pi kernel memory, which is
   closed after the dispatcher exits. Old ciphertext cannot be read with a
   later run's key. The Pi locks the identity's memory pages against swap,
