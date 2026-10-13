@@ -17,17 +17,19 @@ import time
 try:
     from .check_fixture import parse_request
     from .artifact_verification import (validate_catalog, verify_signed_ciphertext,
-                                        extract_ciphertext_zip)
+                                        extract_ciphertext_bundle)
     from .ephemeral_age import ephemeral_identity, EphemeralIdentity
     from .pi_artifact_store import ARCHIVE_ROOT, archive_run
     from .pi_artifact_cleanup import cleanup_github_artifacts
+    from .binary_envelope import unwrap_binary
 except ImportError:
     from check_fixture import parse_request
     from artifact_verification import (validate_catalog, verify_signed_ciphertext,
-                                       extract_ciphertext_zip)
+                                       extract_ciphertext_bundle)
     from ephemeral_age import ephemeral_identity, EphemeralIdentity
     from pi_artifact_store import ARCHIVE_ROOT, archive_run
     from pi_artifact_cleanup import cleanup_github_artifacts
+    from binary_envelope import unwrap_binary
 
 
 REPO = "SUAS-STEM/ci-relay-lab"
@@ -108,6 +110,7 @@ def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
     # Independently validate it, plus ZIP paths/types/sizes, before extraction.
     with tempfile.TemporaryDirectory(prefix="ci-relay-logs-") as directory:
         private_logs = {}
+        private_binaries = {}
         for platform in PLATFORMS:
             destination = Path(directory) / platform
             destination.mkdir(mode=0o700)
@@ -117,22 +120,32 @@ def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
                 ["gh", "api", f"repos/{REPO}/actions/artifacts/{metadata['id']}/zip"],
                 capture_output=True, check=True, timeout=45,
             ).stdout
-            ciphertext = extract_ciphertext_zip(compressed, metadata)
-            artifact = destination / "encrypted-log.age"
-            # A private, predictable name in a newly created 0700 directory;
-            # no filename/path from the ZIP archive is ever used.
-            fd = os.open(artifact, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(fd, "wb") as output:
-                output.write(ciphertext)
-            # age alone proves authenticity of bytes under its secret key, not
-            # who encrypted them. Verify GitHub OIDC/Sigstore provenance FIRST.
-            verify_signed_ciphertext(gh, artifact, expected_sha)
+            ciphertexts = extract_ciphertext_bundle(compressed, metadata)
+            verified_files = {}
+            for name, ciphertext in ciphertexts.items():
+                # Safe fixed filenames from exact allowlist, not ZIP paths.
+                artifact = destination / name
+                fd = os.open(artifact, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                             0o600)
+                with os.fdopen(fd, "wb") as output:
+                    output.write(ciphertext)
+                # Age authenticates contents, Sigstore authenticates issuer.
+                verify_signed_ciphertext(gh, artifact, expected_sha)
+                verified_files[name] = artifact
             decrypted = subprocess.run(
                 [str(AGE_EXE), "--decrypt", "-i", identity.identity_path,
-                 str(artifact)],
+                 str(verified_files["encrypted-log.age"])],
                 check=True, capture_output=True, timeout=30,
                 pass_fds=(identity.fd,),
             ).stdout.decode("utf-8", errors="replace")
+            binary_envelope = subprocess.run(
+                [str(AGE_EXE), "--decrypt", "-i", identity.identity_path,
+                 str(verified_files["encrypted-binary.age"])],
+                check=True, capture_output=True, timeout=30,
+                pass_fds=(identity.fd,),
+            ).stdout
+            binary = unwrap_binary(binary_envelope, trace_id, expected_sha,
+                                   run_id, platform, identity.recipient_digest)
             check_decrypted_report_binding(
                 decrypted, trace_id, expected_sha, run_id, platform,
                 identity.recipient_digest,
@@ -145,6 +158,7 @@ def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
             if len(canaries) != 2 or canaries[0] != canaries[1]:
                 raise RuntimeError(f"Encrypted canary invalid for {platform}")
             private_logs[platform] = decrypted
+            private_binaries[platform] = binary
 
         # Checking public logs is part of the end-to-end privacy fixture. This
         # must not replace proper private CI isolation for sensitive workloads.
@@ -165,7 +179,7 @@ def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
         }
         destination = archive_run(ARCHIVE_ROOT, run_id, trace_id, expected_sha,
                                   identity.recipient_digest, private_logs,
-                                  artifact_ids)
+                                  artifact_ids, binaries=private_binaries)
         print(f"Verified long-term Pi copy: {destination}", flush=True)
 
         # Deletion only happens after durable storage succeeded. On an API

@@ -13,12 +13,15 @@ import subprocess
 import sys
 
 from tools.check_fixture import parse_request
+from tools.check_fixture import find_executable
 from tools.ephemeral_age import is_age_recipient
+from tools.binary_envelope import wrap_binary, MAX_BINARY_BYTES
 
 
 ROOT = Path(__file__).resolve().parents[1]
 AGE_EXE = ROOT / ".age-bin" / ("age.exe" if os.name == "nt" else "age")
 OUTPUT = ROOT / "encrypted-log.age"
+BINARY_OUTPUT = ROOT / "encrypted-binary.age"
 BLOCKED_ENV_PREFIXES = (
     "GITHUB_", "ACTIONS_", "RUNNER_", "INPUT_", "GH_", "AWS_",
     "AZURE_", "GOOGLE_", "NPM_", "PIP_", "DOCKER_",
@@ -108,17 +111,32 @@ def main() -> int:
         env={**base_env, "SYNTHETIC_CANARY": canary},
     )
     payload = b"".join(chunks)
-    result = subprocess.run(
-        [str(AGE_EXE), "-r", recipient, "-o", str(OUTPUT), "-"],
-        input=payload,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        check=False,
-        timeout=30,
-    )
-    if result.returncode != 0:
-        raise RuntimeError("Encryption failed: no logs may be uploaded")
-    print("Captured diagnostics encrypted using Pi's public key; plaintext not printed")
+    # Also deliver the *public toy executable*, not just test logs. If the
+    # build failed, encrypt a provenance-bound 'missing' envelope instead.
+    # Neither binary is executed on the Pi after retrieval.
+    binary = None
+    try:
+        executable = find_executable(ROOT / "build")
+        if 0 < executable.stat().st_size <= MAX_BINARY_BYTES:
+            binary = executable.read_bytes()
+        else:
+            failed = True
+    except (OSError, RuntimeError):
+        failed = True
+    binary_payload = wrap_binary(binary, trace, sha, int(run_id),
+                                 platform_name, digest)
+    for output, content in ((OUTPUT, payload), (BINARY_OUTPUT, binary_payload)):
+        result = subprocess.run(
+            [str(AGE_EXE), "-r", recipient, "-o", str(output), "-"],
+            input=content,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("Encryption failed: no logs or binaries may be uploaded")
+    print("Captured toy diagnostics and binary encrypted; plaintext not printed")
     if failed:
         print("One or more synthetic checks failed; details only in encrypted artifact")
     return 1 if failed else 0

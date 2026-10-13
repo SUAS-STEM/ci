@@ -54,12 +54,14 @@ jobs:
           RIGHT: ${{ inputs.right }}
           AGE_RECIPIENT: ${{ inputs.age_recipient }}
         run: python -m tools.run_encrypted_fixture
-      - name: Upload ciphertext only (never plaintext)
+      - name: Upload encrypted diagnostics and synthetic executable
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: encrypted-diagnostics-${{ matrix.os }}
-          path: encrypted-log.age
+          path: |
+            encrypted-log.age
+            encrypted-binary.age
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
@@ -94,8 +96,18 @@ jobs:
         with:
           subject-path: ciphertext/linux/encrypted-log.age
           show-summary: false
+      - name: Sign GitHub OIDC provenance for Linux compiled binary
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: ciphertext/linux/encrypted-binary.age
+          show-summary: false
       - name: Sign GitHub OIDC provenance for Windows ciphertext
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-path: ciphertext/windows/encrypted-log.age
+          show-summary: false
+      - name: Sign GitHub OIDC provenance for Windows compiled binary
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: ciphertext/windows/encrypted-binary.age
           show-summary: false

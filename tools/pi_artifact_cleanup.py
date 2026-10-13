@@ -7,13 +7,16 @@ It does not delete Actions jobs, logs, run records or Sigstore attestations.
 
 import argparse
 import json
+from pathlib import Path
 
 try:
     from .pi_artifact_store import (ARCHIVE_ROOT, PLATFORMS,
-                                     read_verified_archive, record_github_cleanup)
+                                     read_verified_archive, record_github_cleanup,
+                                     pending_github_cleanup)
 except ImportError:
     from pi_artifact_store import (ARCHIVE_ROOT, PLATFORMS,
-                                   read_verified_archive, record_github_cleanup)
+                                   read_verified_archive, record_github_cleanup,
+                                   pending_github_cleanup)
 
 
 REPO = "SUAS-STEM/ci-relay-lab"
@@ -52,9 +55,27 @@ def cleanup_github_artifacts(gh, root, run_id: int) -> dict:
             "github_artifacts_deleted": list(expected.values())}
 
 
+def cleanup_all_pending(gh, root: Path) -> dict:
+    """Crash-recovery batch: no remote deletion without validated local logs."""
+    pending = pending_github_cleanup(root)
+    outcomes = {"completed": [], "failed": []}
+    for run_id in pending:
+        try:
+            cleanup_github_artifacts(gh, root, run_id)
+            outcomes["completed"].append(run_id)
+        except Exception as exc:
+            # Report only exception category, not arbitrary API diagnostics.
+            outcomes["failed"].append({"run_id": run_id,
+                                       "reason": type(exc).__name__})
+    return outcomes
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run_id", type=int)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("run_id", type=int, nargs="?")
+    group.add_argument("--pending", action="store_true",
+                       help="Retry cleanup of all safely archived incomplete runs")
     args = parser.parse_args()
     import subprocess
 
@@ -62,8 +83,10 @@ def main() -> int:
         return subprocess.run(["gh", *arguments], check=True, text=True,
                               capture_output=True, timeout=45).stdout
 
-    print(json.dumps(cleanup_github_artifacts(gh, ARCHIVE_ROOT, args.run_id), indent=2))
-    return 0
+    result = (cleanup_all_pending(gh, ARCHIVE_ROOT) if args.pending
+              else cleanup_github_artifacts(gh, ARCHIVE_ROOT, args.run_id))
+    print(json.dumps(result, indent=2))
+    return 1 if result.get("failed") else 0
 
 
 if __name__ == "__main__":

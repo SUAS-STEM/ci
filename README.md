@@ -23,8 +23,11 @@ The script triggers a workflow, finds the exact trace ID, waits for both Windows
 and Linux, retrieves the GitHub run/job conclusions and ciphertext artifacts,
 and decrypts them **only on the Pi** with age. **The Pi is the permanent artifact
 store**: verified synthetic build diagnostics are saved under
-`~/ci-artifacts/ci-relay-lab/run-<GitHub-run-ID>/` as two `.log` files and a
+`~/ci-artifacts/ci-relay-lab/run-<GitHub-run-ID>/` as two `.log` files,
+the actual public synthetic Linux and Windows compiled executables, and a
 SHA-256 manifest. The directory is `0700` and each file is `0600`.
+Compiled files are named `ubuntu-24.04.bin` and `windows-2025.exe` and stored
+non-executable on the Pi; a failed build is recorded with a missing binary.
 All files and directory entries are fsync'd, atomically committed and read back
 before either temporary GitHub Actions ciphertext artifact is deleted through
 the GitHub API. Artifacts are uploaded with 1-day retention as a fallback, but
@@ -46,8 +49,13 @@ the synthetic CI job must be rerun. A failed GitHub deletion never removes the
 durable Pi files. Deleting uploaded artifacts does **not** erase public Actions
 job logs, run records, or Sigstore provenance attestations.
 
-This prototype's archived artifacts are **diagnostic logs**, not compiled GCS
-binaries; the toy repository does not build proprietary GCS artifacts. Long-term
+`python3 tools/pi_artifact_cleanup.py --pending` verifies and retries any
+previously saved runs whose GitHub cleanup was interrupted. It is safe to run
+after reboot without the original ephemeral decryption key. It is not installed
+as an unattended service until the protected PR is reviewed and merged.
+
+This prototype's archived artifacts are **public toy builds and diagnostics**,
+not compiled GCS binaries; the toy repository does not build proprietary GCS artifacts. Long-term
 confidential output on the Pi would additionally need encrypted storage and a
 trusted private execution environment.
 

@@ -37,17 +37,25 @@ compile, decrypt, package, test or transmit nonpublic or proprietary source.
 - The Pi downloads only two known artifact names and rejects any extra files,
   missing artifact, incorrect size or unsupported ciphertext format.
 - **Local retention is indefinite.** After verified download and decryption,
-  the Pi writes both logs and a SHA-256 manifest to
+  the Pi writes both logs, available public toy compiled binaries, and a SHA-256 manifest to
   `~/ci-artifacts/ci-relay-lab/run-ID/` with directories `0700`, files `0600`,
   file and directory `fsync`, an atomic rename, and checksum readback. It
   refuses symlinks, untrusted file ownership, unexpected files and overwrites.
+- Both public toy executables have separately signed encrypted payloads; their
+  decrypted envelopes bind run ID, commit, platform, recipient hash, payload
+  length and SHA-256. Failed builds are explicitly marked missing. Executables
+  are stored without execute permission and never run on the Pi.
 - Only after durable storage succeeds does the Pi delete the exact two
   GitHub artifact IDs using its local CLI credentials. It confirms the IDs are
   absent from the GitHub artifact listing. Incomplete deletion is retryable
   with `tools/pi_artifact_cleanup.py RUN_ID`, without any private age key.
+- `tools/pi_artifact_cleanup.py --pending` finds verified archives whose
+  GitHub cleanup was interrupted and safely retries their deletion. It rejects
+  malformed cleanup receipts and corrupted local archives.
 - The Pi retrieves each artifact ZIP from GitHub's API, verifies the exact
   published ZIP SHA-256 and byte count, then inspects it using a bounded ZIP
-  parser. Only the single `encrypted-log.age` file is accepted; traversal
+  parser. Only the two exact files `encrypted-log.age` and
+  `encrypted-binary.age` are accepted; traversal
   paths, additional files, symlinks, invalid sizes, and oversized expanded
   content are rejected before extracting the ciphertext.
 - Every dispatch receives a **different** X25519 recipient private key generated

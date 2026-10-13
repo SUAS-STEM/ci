@@ -25,6 +25,25 @@ class VerificationTests(unittest.TestCase):
         blob, metadata, ciphertext = self.make_archive()
         self.assertEqual(av.extract_ciphertext_zip(blob, metadata), ciphertext)
 
+    def test_two_encrypted_members_required_for_build(self):
+        first = b"age-encryption.org/v1\n" + b"X" * 200
+        second = b"age-encryption.org/v1\n" + b"Y" * 240
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, mode="w") as archive:
+            archive.writestr("encrypted-log.age", first)
+            archive.writestr("encrypted-binary.age", second)
+        blob = buffer.getvalue()
+        meta = {"size_in_bytes": len(blob), "digest": "sha256:" + hashlib.sha256(blob).hexdigest()}
+        self.assertEqual(av.extract_ciphertext_bundle(blob, meta), {
+            "encrypted-log.age": first,
+            "encrypted-binary.age": second,
+        })
+
+    def test_missing_compiled_artifact_is_rejected(self):
+        blob, meta, _ = self.make_archive()
+        with self.assertRaises(ValueError):
+            av.extract_ciphertext_bundle(blob, meta)
+
     def test_modified_artifact_zip_is_rejected(self):
         blob, metadata, _ = self.make_archive()
         changed = bytearray(blob)

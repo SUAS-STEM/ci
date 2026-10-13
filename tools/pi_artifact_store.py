@@ -17,6 +17,9 @@ import tempfile
 ARCHIVE_ROOT = Path.home() / "ci-artifacts" / "ci-relay-lab"
 PLATFORMS = ("ubuntu-24.04", "windows-2025")
 MAX_LOG_BYTES = 20 * 1024 * 1024
+BINARY_FILENAMES = {"ubuntu-24.04": "ubuntu-24.04.bin",
+                    "windows-2025": "windows-2025.exe"}
+MAX_BINARY_BYTES = 8 * 1024 * 1024
 
 
 def _private_dir(directory: Path, create: bool = False) -> None:
@@ -70,6 +73,7 @@ def _validate_identity(run_id: int, trace: str, sha: str, recipient_sha: str) ->
 def archive_run(
     root: Path, run_id: int, trace: str, sha: str, recipient_sha: str,
     logs: dict[str, str], artifact_ids: dict[str, int],
+    binaries: dict[str, bytes | None] | None = None,
 ) -> Path:
     """Make an immutable, verified run directory. Never overwrite a run."""
     _validate_identity(run_id, trace, sha, recipient_sha)
@@ -82,8 +86,23 @@ def archive_run(
     payloads = {f"{p}.log": logs[p].encode("utf-8", errors="strict") for p in PLATFORMS}
     if any(not 1 < len(value) < MAX_LOG_BYTES for value in payloads.values()):
         raise ValueError("Unexpected size of decrypted diagnostics")
+    schema = 1 if binaries is None else 2
+    binary_status = None
+    if binaries is not None:
+        if set(binaries) != set(PLATFORMS):
+            raise ValueError("Both synthetic binary statuses are required")
+        binary_status = {}
+        for platform in PLATFORMS:
+            data = binaries[platform]
+            if data is None:
+                binary_status[platform] = "missing"
+            elif type(data) is bytes and 0 < len(data) <= MAX_BINARY_BYTES:
+                payloads[BINARY_FILENAMES[platform]] = data
+                binary_status[platform] = "present"
+            else:
+                raise ValueError("Invalid compiled synthetic binary bytes")
     manifest = {
-        "schema": 1,
+        "schema": schema,
         "repository": "SUAS-STEM/ci-relay-lab",
         "run_id": run_id, "trace": trace, "commit": sha,
         "recipient_sha256": recipient_sha,
@@ -92,6 +111,8 @@ def archive_run(
                   for name, data in payloads.items()},
         "verified": "age+sigstore+run-binding+no-public-canary",
     }
+    if binary_status is not None:
+        manifest["binary_status"] = binary_status
     _prepare_root(root)
     destination = root / f"run-{run_id}"
     if destination.exists() or destination.is_symlink():
@@ -128,32 +149,81 @@ def read_verified_archive(root: Path, run_id: int) -> dict:
     _private_dir(root)
     run = root / f"run-{run_id}"
     _private_dir(run)
-    if sorted(item.name for item in run.iterdir() if item.name != "github-cleanup.json") != [
-        "manifest.json", "ubuntu-24.04.log", "windows-2025.log"
-    ]:
-        raise RuntimeError("Archive contains missing or unexpected files")
+    entries = {item.name for item in run.iterdir()}
+    expected_names = {"manifest.json", "ubuntu-24.04.log", "windows-2025.log"}
     manifest_path = run / "manifest.json"
-    for name in ("manifest.json", "ubuntu-24.04.log", "windows-2025.log"):
+    for name in ("manifest.json",):
         path = run / name
         info = path.lstat()
         if not path.is_file() or path.is_symlink() or info.st_uid != os.getuid() or (info.st_mode & 0o777) != 0o600:
             raise RuntimeError("Untrusted local artifact file")
+    cleanup_receipt = None
+    if "github-cleanup.json" in entries:
+        receipt = run / "github-cleanup.json"
+        info = receipt.lstat()
+        if (not receipt.is_file() or receipt.is_symlink()
+                or info.st_uid != os.getuid() or (info.st_mode & 0o777) != 0o600):
+            raise RuntimeError("Untrusted GitHub cleanup receipt")
+        cleanup_receipt = json.loads(receipt.read_text("utf-8"))
     manifest = json.loads(manifest_path.read_text("utf-8"))
+    if manifest.get("schema") == 2:
+        status = manifest.get("binary_status")
+        if not isinstance(status, dict) or set(status) != set(PLATFORMS) or any(
+            value not in ("present", "missing") for value in status.values()
+        ):
+            raise RuntimeError("Malformed synthetic compiled-binary status")
+        expected_names.update(BINARY_FILENAMES[p] for p in PLATFORMS
+                              if status[p] == "present")
+    elif manifest.get("schema") != 1:
+        raise RuntimeError("Unsupported Pi archive manifest schema")
+    if entries - {"github-cleanup.json"} != expected_names:
+        raise RuntimeError("Archive contains missing or unexpected files")
     _validate_identity(manifest["run_id"], manifest["trace"], manifest["commit"],
                        manifest["recipient_sha256"])
     if manifest["run_id"] != run_id or manifest.get("repository") != "SUAS-STEM/ci-relay-lab":
         raise RuntimeError("Local run identity mismatch")
     if set(manifest.get("artifact_ids", {})) != set(PLATFORMS):
         raise RuntimeError("Missing verified remote artifact identifiers")
-    if set(manifest.get("files", {})) != {f"{p}.log" for p in PLATFORMS}:
+    if cleanup_receipt is not None and cleanup_receipt != {
+        "run_id": run_id,
+        "deleted_artifact_ids": manifest["artifact_ids"],
+        "confirmed_absent_from_github": True,
+    }:
+        raise RuntimeError("Local cleanup receipt does not match verified run")
+    if set(manifest.get("files", {})) != expected_names - {"manifest.json"}:
         raise RuntimeError("Missing verified local artifact hashes")
     for name, description in manifest["files"].items():
-        data = (run / name).read_bytes()
-        if not 1 < len(data) < MAX_LOG_BYTES or len(data) != description["bytes"]:
+        path = run / name
+        info = path.lstat()
+        if not path.is_file() or path.is_symlink() or info.st_uid != os.getuid() or (info.st_mode & 0o777) != 0o600:
+            raise RuntimeError("Untrusted local artifact file")
+        data = path.read_bytes()
+        maximum = MAX_BINARY_BYTES if name in BINARY_FILENAMES.values() else MAX_LOG_BYTES
+        if not 0 < len(data) <= maximum or len(data) != description["bytes"]:
             raise RuntimeError("Local artifact size mismatch")
         if hashlib.sha256(data).hexdigest() != description["sha256"]:
             raise RuntimeError("Local artifact checksum mismatch")
     return manifest
+
+
+def pending_github_cleanup(root: Path) -> list[int]:
+    """Enumerate intact Pi archives without cleanup receipts.
+
+    Unrecognized entries and crashed staging directories are never trusted or
+    processed. A damaged archive fails closed rather than authorizing deletion.
+    """
+    _private_dir(root.parent)
+    _private_dir(root)
+    pending = []
+    for child in root.iterdir():
+        match = re.fullmatch(r"run-([1-9][0-9]*)", child.name)
+        if match is None:
+            continue
+        run_id = int(match.group(1))
+        read_verified_archive(root, run_id)
+        if not (child / "github-cleanup.json").exists():
+            pending.append(run_id)
+    return sorted(pending)
 
 
 def record_github_cleanup(root: Path, run_id: int, artifact_ids: dict[str, int]) -> None:

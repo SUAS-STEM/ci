@@ -36,6 +36,12 @@ def validate_catalog(catalog: dict, run_id: int) -> None:
 
 
 def extract_ciphertext_zip(blob: bytes, metadata: dict) -> bytes:
+    """Legacy single-log synthetic archive validator (tests only)."""
+    return extract_ciphertext_bundle(blob, metadata, ("encrypted-log.age",))["encrypted-log.age"]
+
+
+def extract_ciphertext_bundle(blob: bytes, metadata: dict,
+                              expected_names=("encrypted-log.age", "encrypted-binary.age")) -> dict[str, bytes]:
     """Validate the exact GitHub artifact ZIP before extracting any bytes.
 
     No blind unzip, no paths supplied by an untrusted archive, and a tight
@@ -50,21 +56,25 @@ def extract_ciphertext_zip(blob: bytes, metadata: dict) -> bytes:
     try:
         with zipfile.ZipFile(BytesIO(blob)) as archive:
             members = archive.infolist()
-            if len(members) != 1 or members[0].filename != "encrypted-log.age":
+            if len(members) != len(expected_names) or {m.filename for m in members} != set(expected_names):
                 raise ValueError("Unexpected file or path in encrypted artifact")
-            member = members[0]
-            mode = (member.external_attr >> 16) & 0xFFFF
-            if member.is_dir() or (mode and stat.S_IFMT(mode) not in (0, stat.S_IFREG)):
-                raise ValueError("Artifact member cannot be a symlink or special file")
-            if not 100 < member.file_size < MAX_BYTES:
-                raise ValueError("Encrypted artifact decompressed size invalid")
-            with archive.open(member, "r") as source:
-                ciphertext = source.read(MAX_BYTES + 1)
-            if len(ciphertext) != member.file_size or len(ciphertext) >= MAX_BYTES:
-                raise ValueError("Encrypted artifact exceeds extraction limit")
-            if not ciphertext.startswith(b"age-encryption.org/v1\n"):
-                raise ValueError("ZIP did not contain an age ciphertext")
-            return ciphertext
+            if sum(member.file_size for member in members) >= MAX_BYTES:
+                raise ValueError("Total archive expansion exceeds limit")
+            result = {}
+            for member in members:
+                mode = (member.external_attr >> 16) & 0xFFFF
+                if member.is_dir() or (mode and stat.S_IFMT(mode) not in (0, stat.S_IFREG)):
+                    raise ValueError("Artifact member cannot be a symlink or special file")
+                if not 100 < member.file_size < MAX_BYTES:
+                    raise ValueError("Encrypted artifact decompressed size invalid")
+                with archive.open(member, "r") as source:
+                    ciphertext = source.read(MAX_BYTES + 1)
+                if len(ciphertext) != member.file_size or len(ciphertext) >= MAX_BYTES:
+                    raise ValueError("Encrypted artifact exceeds extraction limit")
+                if not ciphertext.startswith(b"age-encryption.org/v1\n"):
+                    raise ValueError("ZIP did not contain an age ciphertext")
+                result[member.filename] = ciphertext
+            return result
     except (zipfile.BadZipFile, EOFError, RuntimeError) as exc:
         raise ValueError("Invalid ciphertext ZIP archive") from exc
 

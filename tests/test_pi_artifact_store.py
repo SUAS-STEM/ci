@@ -7,8 +7,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from tools.pi_artifact_store import archive_run, read_verified_archive
-from tools.pi_artifact_cleanup import cleanup_github_artifacts
+from tools.pi_artifact_store import (archive_run, read_verified_archive,
+                                     pending_github_cleanup)
+from tools.pi_artifact_cleanup import (cleanup_github_artifacts,
+                                        cleanup_all_pending)
 
 
 @unittest.skipUnless(os.name == "posix", "Pi-only protected directory behavior")
@@ -41,6 +43,30 @@ class DurableArchiveTest(unittest.TestCase):
         for name in ("manifest.json", "ubuntu-24.04.log", "windows-2025.log"):
             self.assertEqual((path / name).stat().st_mode & 0o777, 0o600)
 
+    def test_compiled_linux_and_windows_outputs_are_durable(self):
+        binaries = {"ubuntu-24.04": b"\x7fELFsynthetic",
+                    "windows-2025": b"MZsynthetic"}
+        path = archive_run(self.root, self.run, self.trace, self.sha,
+                           self.recipient, self.logs, self.ids, binaries=binaries)
+        manifest = read_verified_archive(self.root, self.run)
+        self.assertEqual(manifest["schema"], 2)
+        for name, value in (("ubuntu-24.04.bin", binaries["ubuntu-24.04"]),
+                            ("windows-2025.exe", binaries["windows-2025"])):
+            self.assertEqual((path / name).read_bytes(), value)
+            self.assertEqual((path / name).stat().st_mode & 0o777, 0o600)
+
+    def test_modified_binary_cannot_trigger_remote_deletion(self):
+        path = archive_run(self.root, self.run, self.trace, self.sha,
+                           self.recipient, self.logs, self.ids,
+                           binaries={"ubuntu-24.04": b"\x7fELFsynthetic",
+                                     "windows-2025": b"MZsynthetic"})
+        (path / "windows-2025.exe").write_bytes(b"tampered")
+        calls = []
+        with self.assertRaises(RuntimeError):
+            cleanup_github_artifacts(lambda *args: calls.append(args),
+                                     self.root, self.run)
+        self.assertEqual(calls, [])
+
     def test_corruption_prevents_remote_deletion(self):
         path = self.store()
         (path / "windows-2025.log").write_text("modified", encoding="utf-8")
@@ -56,6 +82,53 @@ class DurableArchiveTest(unittest.TestCase):
         file.symlink_to(path / "windows-2025.log")
         with self.assertRaises(RuntimeError):
             read_verified_archive(self.root, self.run)
+
+    def test_refuses_symlinked_remote_cleanup_receipt(self):
+        path = self.store()
+        (path / "github-cleanup.json").symlink_to(path / "manifest.json")
+        with self.assertRaises(RuntimeError):
+            read_verified_archive(self.root, self.run)
+
+    def test_find_pending_ignores_partial_stages_and_verified_completed_runs(self):
+        self.store()
+        (self.root / ".stage-999999-crashed").mkdir(mode=0o700)
+        self.assertEqual(pending_github_cleanup(self.root), [self.run])
+        receipt = self.root / f"run-{self.run}" / "github-cleanup.json"
+        receipt.write_text(
+            json.dumps({"run_id": self.run, "deleted_artifact_ids": self.ids,
+                        "confirmed_absent_from_github": True}), encoding="utf-8")
+        receipt.chmod(0o600)
+        self.assertEqual(pending_github_cleanup(self.root), [])
+
+    def test_malformed_receipt_cannot_silently_suppress_cleanup(self):
+        path = self.store()
+        (path / "github-cleanup.json").write_text("{}", encoding="utf-8")
+        with self.assertRaises(RuntimeError):
+            pending_github_cleanup(self.root)
+
+    def test_pending_cleanup_after_pi_restart(self):
+        self.store()
+        events = []
+        catalog = {"artifacts": [
+            {"name": "encrypted-diagnostics-" + name, "id": ident}
+            for name, ident in self.ids.items()
+        ]}
+
+        def gh(*args):
+            events.append(args)
+            if len(args) == 2:
+                return json.dumps(catalog)
+            ident = int(args[-1].rsplit('/', 1)[1])
+            catalog["artifacts"] = [
+                item for item in catalog["artifacts"] if item["id"] != ident
+            ]
+            return ""
+
+        self.assertEqual(cleanup_all_pending(gh, self.root)["completed"], [self.run])
+        self.assertEqual(cleanup_all_pending(gh, self.root), {
+            "completed": [], "failed": [],
+        })
+        self.assertEqual(len([event for event in events if "DELETE" in event]), 2)
 
     def test_refuses_changed_existing_run(self):
         self.store()
