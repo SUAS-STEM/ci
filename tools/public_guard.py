@@ -38,6 +38,13 @@ PUBLIC_FIXTURE_HASHES = {
 }
 
 
+def public_text_digest(data: bytes) -> str:
+    """Hash equivalent Git text checkouts consistently on Unix and Windows."""
+    if b"\r" in data.replace(b"\r\n", b""):
+        raise ValueError("Unexpected bare carriage return in public toy source")
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
 def check_paths(paths: set[str]) -> None:
     unexpected = paths - ALLOWED_FILES
     required = {"src/synthetic_adder.cpp", "CMakeLists.txt", "keys/pi-logs.agepub"}
@@ -59,7 +66,7 @@ def check_tree(root: Path) -> None:
         if path.stat().st_size > 200_000:
             raise ValueError("Unexpectedly large public fixture file")
     for name, expected in PUBLIC_FIXTURE_HASHES.items():
-        if hashlib.sha256((root / name).read_bytes()).hexdigest() != expected:
+        if public_text_digest((root / name).read_bytes()) != expected:
             raise ValueError("Toy source hash changed; explicit review required")
     # Deliberately examine key files instead of hiding detected contents.
     key_content = (root / "keys/pi-logs.agepub").read_text().strip()

@@ -41,6 +41,16 @@ class PublicGuardTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             public_guard.check_runner_context(environment)
 
+    def test_windows_crlf_checkout_preserves_public_fixture_hash(self):
+        original = (public_guard.ROOT / "src/synthetic_adder.cpp").read_bytes()
+        windows_bytes = original.replace(b"\n", b"\r\n")
+        self.assertEqual(public_guard.public_text_digest(original),
+                         public_guard.public_text_digest(windows_bytes))
+
+    def test_bare_carriage_return_is_rejected(self):
+        with self.assertRaises(ValueError):
+            public_guard.public_text_digest(b"hello\rworld")
+
 
 if __name__ == "__main__":
     unittest.main()
