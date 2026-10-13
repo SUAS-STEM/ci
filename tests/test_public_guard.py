@@ -1,0 +1,46 @@
+import os
+from pathlib import Path
+import unittest
+
+from tools import public_guard
+
+
+class PublicGuardTest(unittest.TestCase):
+    def test_current_public_tree_passes(self):
+        public_guard.check_tree(public_guard.ROOT)
+
+    def test_reject_private_source_in_any_new_path(self):
+        with self.assertRaises(ValueError):
+            public_guard.check_paths(set(public_guard.ALLOWED_FILES) | {"gcs/private_build.cpp"})
+
+    def test_reject_symlinked_source(self):
+        self.assertFalse((public_guard.ROOT / "src" / "synthetic_adder.cpp").is_symlink())
+
+    def test_no_proprietary_material_in_public_documentation(self):
+        public_guard.check_tree(public_guard.ROOT)
+
+    def test_reject_untrusted_branch(self):
+        environment = {
+            "GITHUB_REPOSITORY": "SUAS-STEM/ci-relay-lab",
+            "GITHUB_REF": "refs/heads/attacker",
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_ACTOR": "eschan145",
+            "GITHUB_SHA": "a" * 40,
+        }
+        with self.assertRaises(ValueError):
+            public_guard.check_runner_context(environment)
+
+    def test_reject_different_repo(self):
+        environment = {
+            "GITHUB_REPOSITORY": "SUAS-STEM/gcs",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_ACTOR": "eschan145",
+            "GITHUB_SHA": "a" * 40,
+        }
+        with self.assertRaises(ValueError):
+            public_guard.check_runner_context(environment)
+
+
+if __name__ == "__main__":
+    unittest.main()

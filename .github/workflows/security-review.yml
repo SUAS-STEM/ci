@@ -1,0 +1,24 @@
+name: Public source safety check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  public-source-gate:
+    name: public-source-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Checkout public test repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Reject unexpected source files and changed toy source
+        run: python3 -m tools.public_guard --tree-only
+      - name: Regression tests for security guard
+        run: python3 -m unittest discover -s tests -v

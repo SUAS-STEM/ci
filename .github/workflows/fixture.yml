@@ -20,8 +20,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: synthetic-lab-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   test:
+    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.actor == 'eschan145'
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 12
@@ -34,6 +39,8 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - name: Reject nonpublic source or unapproved workflow context
+        run: python -m tools.public_guard
       - name: Install checksum-verified age encryption utility
         run: python tools/install_age.py
       - name: Capture and encrypt all synthetic build/test output
