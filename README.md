@@ -29,13 +29,20 @@ Pi credentials, private source, private build artifacts, or unreviewed scripts.
 
 ## Encryption key
 
-The public recipient key is `keys/pi-logs.agepub`, and the Pi-only identity is
-`/home/pi/.config/ci-relay-lab/identity.txt` (`0600`). The key was generated on
-the Pi with `age-keygen`; **the private identity is never copied to GitHub**.
-To create a new key for a new deployment, generate an age identity directly on
-the recipient host and commit only its public recipient key. Protect and back up
-the private key through an appropriate encrypted private mechanism; losing it
-means existing encrypted artifacts cannot be decrypted.
+**Every run gets a new public/private age keypair.** The Pi runs `age-keygen`
+directly into a sealed Linux anonymous `memfd` (no named private-key file and
+no Python plaintext copy of the private key). Only the corresponding *public*
+recipient travels to GitHub as a workflow input. Two CI workers encrypt their
+independent output artifacts to the same one-run recipient. On the Pi, the
+private key's descriptor is inherited by only the `age` decryption subprocess;
+it is closed after verification. Previous artifacts cannot be decrypted after
+that key is discarded. **If the dispatcher process dies, that run's logs are
+permanently unavailable; restart a fresh run.**
+
+The previous test's legacy persistent age identity exists only on the Pi for
+historical synthetic artifacts; the current protocol never reads it.
+Anonymous kernel memory can still be paged to swap or exposed by privileged
+process inspection or crash dumps; this is not hardware-backed key protection.
 
 The runner executes fixed, public C++ build/test commands with subprocess
 stdout/stderr captured in memory, then encrypts that stream with age. Even a
@@ -56,17 +63,20 @@ it does **not** turn a public repository into secure private-build infrastructur
 ## Security boundary
 
 - Workflow inputs are a random trace ID and two constrained integers; no files,
-  arbitrary commands, source archives, repository identifiers, or secrets.
+  arbitrary commands, source archives, repository identifiers, or secrets. A
+  one-run **public** age recipient is also sent for encrypted logs.
 - The compiled program is tracked **in this public repository**. Dispatch cannot
   change which code is compiled.
-- Workflow token has read-only contents permissions, checkout doesn't persist it,
-  there are no repository secrets or public Actions artifacts/caches to expose.
+- Build workflow tokens have read-only contents permissions; the dedicated
+  signing job has tightly scoped attestations/OIDC permissions. Checkout
+  doesn't persist credentials, and there are no repository secrets or caches.
 - The GitHub CLI authentication remains on the Pi. Whoever controls that account
   could still trigger workflows or edit the public repository; use a minimally
   privileged fine-grained token or GitHub App for any future unattended use.
 - The Pi checks that local HEAD, remote `main`, and actual workflow run commit
   all match. It rejects mismatched runs and verifies encrypted report metadata
-  contains the exact run ID, platform and commit before accepting diagnostics.
+  contains the exact run ID, platform, commit **and one-run recipient digest**
+  before accepting diagnostics. Artifacts cannot be replayed between runs.
 - Only the four SHA-pinned GitHub actions in these workflows are permitted by
   the repository Actions policy. Action SHA pinning is required in GitHub settings.
 - Secret scanning and push protection are enabled for this public repository.

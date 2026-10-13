@@ -6,16 +6,17 @@ commands verify that even their diagnostics remain inside the ciphertext.
 
 import os
 from pathlib import Path
+import hashlib
 import re
 import secrets
 import subprocess
 import sys
 
 from tools.check_fixture import parse_request
+from tools.ephemeral_age import is_age_recipient
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PUBKEY_FILE = ROOT / "keys" / "pi-logs.agepub"
 AGE_EXE = ROOT / ".age-bin" / ("age.exe" if os.name == "nt" else "age")
 OUTPUT = ROOT / "encrypted-log.age"
 BLOCKED_ENV_PREFIXES = (
@@ -44,11 +45,11 @@ def main() -> int:
     left = os.environ["LEFT"]
     right = os.environ["RIGHT"]
     parse_request(trace, left, right)
-    if not PUBKEY_FILE.is_file() or not AGE_EXE.is_file():
+    if not AGE_EXE.is_file():
         raise RuntimeError("Encryption prerequisites unavailable: fail closed")
-    recipient = PUBKEY_FILE.read_text().strip()
-    if not recipient.startswith("age1") or len(recipient) != 62:
-        raise RuntimeError("Invalid pinned public recipient key")
+    recipient = os.environ["AGE_RECIPIENT"]
+    if not is_age_recipient(recipient):
+        raise RuntimeError("Invalid per-run public recipient key")
 
     # Log data never appears on stdout/stderr; a subprocess failure only changes
     # the encrypted report and (after encryption succeeds) the runner exit status.
@@ -89,7 +90,8 @@ def main() -> int:
     sha = os.environ["GITHUB_SHA"]
     if platform_name == "invalid" or not run_id.isdecimal() or not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise RuntimeError("Unrecognized GitHub runner context")
-    chunks.append(f"trace={trace}\ncommit={sha}\nrun={run_id}\nplatform={platform_name}\ncanary={canary}\n".encode())
+    digest = hashlib.sha256(recipient.encode("ascii")).hexdigest()
+    chunks.append(f"trace={trace}\ncommit={sha}\nrun={run_id}\nplatform={platform_name}\nrecipient_sha256={digest}\ncanary={canary}\n".encode())
     capture("Python input validation", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"])
     capture("CMake configure", ["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"])
     capture("C++ compile", ["cmake", "--build", "build", "--config", "Release", "--parallel", "2"])

@@ -8,7 +8,7 @@ compile, decrypt, package, test or transmit nonpublic or proprietary source.
 
 - Public toy program in `src/synthetic_adder.cpp` (checked by SHA-256)
 - Numeric operands from -9999 through 9999 and a harmless generated trace ID
-- Pi's **public** age recipient (never its secret identity)
+- A freshly generated, per-run **public** age recipient (never its secret identity)
 - age-encrypted diagnostic artifacts containing synthetic output only
 
 ## Barriers
@@ -36,6 +36,10 @@ compile, decrypt, package, test or transmit nonpublic or proprietary source.
   absent, tampered or incorrectly signed artifacts fail closed.
 - The Pi downloads only two known artifact names and rejects any extra files,
   missing artifact, incorrect size or unsupported ciphertext format.
+- Every dispatch receives a **different** X25519 recipient private key generated
+  directly into a sealed Linux memfd. Only that recipient's public key is sent
+  to GitHub. The Pi checks the recipient digest inside decrypted run metadata;
+  a different run's artifact or key is rejected.
 
 ## What encryption **does not** protect
 
@@ -68,6 +72,10 @@ dashboard may safely display coarse non-sensitive status only.
   provenance also cannot prevent the hosted runner from reading toy source.
 - Ciphertext ZIP artifacts and signed provenance are publicly retrievable.
   Their 1-day retention is for data minimization, **not** confidentiality.
-- The private age identity stored as a Pi `0600` file is vulnerable if the
-  same Pi user or host is compromised. It must be kept off public servers,
-  safeguarded with encrypted backups and rotated if suspected compromised.
+- Each run's private identity lives in anonymous Pi kernel memory, which is
+  closed after the dispatcher exits. Old ciphertext cannot be read with a
+  later run's key. Interrupting the Pi dispatcher irrecoverably loses the key.
+  Do not claim cryptographic forward secrecy against an attacker with live Pi
+  access: kernel memory, swap, process debugging and crash dumps remain risks.
+  Older **synthetic-only** test runs used a persistent identity that has no role
+  in the newer per-run protocol.

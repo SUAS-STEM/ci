@@ -20,14 +20,15 @@ ALLOWED_FILES = frozenset({
     "CMakeLists.txt",
     "README.md",
     "SECURITY.md",
-    "keys/pi-logs.agepub",
     "src/synthetic_adder.cpp",
     "tests/test_check_fixture.py",
     "tests/test_artifact_verification.py",
+    "tests/test_ephemeral_age.py",
     "tests/test_public_guard.py",
     "tools/check_fixture.py",
     "tools/artifact_verification.py",
     "tools/install_age.py",
+    "tools/ephemeral_age.py",
     "tools/pi_fixture_dispatch.py",
     "tools/public_guard.py",
     "tools/run_encrypted_fixture.py",
@@ -37,7 +38,6 @@ ALLOWED_FILES = frozenset({
 PUBLIC_FIXTURE_HASHES = {
     "src/synthetic_adder.cpp": "23c233de65d78fff841c5e2f00deafc3c0a0e3a51a68d53c9fca0308d6463fa2",
     "CMakeLists.txt": "6644c79516314b982566d0099a395a603006942f70f7c0b15ca517b676c6f8f2",
-    "keys/pi-logs.agepub": "6b537057a431a010a459b416a9befd50bdd7eb3b4f01afdaf570a93a671fc6e6",
 }
 
 
@@ -50,7 +50,7 @@ def public_text_digest(data: bytes) -> str:
 
 def check_paths(paths: set[str]) -> None:
     unexpected = paths - ALLOWED_FILES
-    required = {"src/synthetic_adder.cpp", "CMakeLists.txt", "keys/pi-logs.agepub"}
+    required = {"src/synthetic_adder.cpp", "CMakeLists.txt", "tools/ephemeral_age.py"}
     if unexpected or not required.issubset(paths):
         raise ValueError("Source tree is not the approved public-only fixture")
 
@@ -71,13 +71,6 @@ def check_tree(root: Path) -> None:
     for name, expected in PUBLIC_FIXTURE_HASHES.items():
         if public_text_digest((root / name).read_bytes()) != expected:
             raise ValueError("Toy source hash changed; explicit review required")
-    # Deliberately examine key files instead of hiding detected contents.
-    key_content = (root / "keys/pi-logs.agepub").read_text().strip()
-    if not re.fullmatch(r"age1[ac-hj-np-z02-9]{58}", key_content):
-        raise ValueError("Only an age public recipient may be committed")
-    if "PRIVATE KEY" in key_content.upper():
-        raise ValueError("Private key must never be published")
-
     # Catch obvious accidental private-key material in documentation and the
     # public sample. This is not a complete secret scanner; GitHub push
     # protection and human review are separate mandatory controls.

@@ -41,8 +41,9 @@ class PublicGuardTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             public_guard.check_runner_context(environment)
 
-    def test_age_recipient_is_pinned(self):
-        self.assertIn("keys/pi-logs.agepub", public_guard.PUBLIC_FIXTURE_HASHES)
+    def test_no_static_recipient_is_committed(self):
+        self.assertNotIn("keys/pi-logs.agepub", public_guard.ALLOWED_FILES)
+        self.assertIn("tools/ephemeral_age.py", public_guard.ALLOWED_FILES)
 
     def test_windows_crlf_checkout_preserves_public_fixture_hash(self):
         original = (public_guard.ROOT / "src/synthetic_adder.cpp").read_bytes()

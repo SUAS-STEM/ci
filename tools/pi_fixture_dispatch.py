@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import stat
 import subprocess
 import tempfile
 import time
@@ -18,17 +17,17 @@ import time
 try:
     from .check_fixture import parse_request
     from .artifact_verification import validate_catalog, verify_signed_ciphertext
+    from .ephemeral_age import ephemeral_identity, EphemeralIdentity
 except ImportError:
     from check_fixture import parse_request
     from artifact_verification import validate_catalog, verify_signed_ciphertext
+    from ephemeral_age import ephemeral_identity, EphemeralIdentity
 
 
 REPO = "SUAS-STEM/ci-relay-lab"
 WORKFLOW = "fixture.yml"
 OUTPUT_FILE = Path(__file__).resolve().parents[1] / ".ci-relay-lab-last-run.json"
-IDENTITY_FILE = Path.home() / ".config" / "ci-relay-lab" / "identity.txt"
 AGE_EXE = Path(__file__).resolve().parents[1] / ".age-bin" / "age"
-PUBLIC_KEY = Path(__file__).resolve().parents[1] / "keys" / "pi-logs.agepub"
 PLATFORMS = ("ubuntu-24.04", "windows-2025")
 MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
 
@@ -65,29 +64,6 @@ def locate_run(trace_id: str, expected_sha: str) -> int | None:
     return matches[0]["databaseId"]
 
 
-def verify_local_key() -> None:
-    """Fail if private identity is exposed or the public recipient is changed."""
-    root = Path(__file__).resolve().parents[1]
-    if not IDENTITY_FILE.is_file() or IDENTITY_FILE.is_symlink():
-        raise RuntimeError("Missing regular Pi-only identity")
-    if IDENTITY_FILE.parent.is_symlink():
-        raise RuntimeError("Refusing symlinked Pi identity directory")
-    st = IDENTITY_FILE.stat()
-    parent = IDENTITY_FILE.parent.stat()
-    if st.st_uid != os.getuid() or parent.st_uid != os.getuid():
-        raise RuntimeError("Unexpected owner for Pi identity")
-    if stat.S_IMODE(st.st_mode) != 0o600 or stat.S_IMODE(parent.st_mode) != 0o700:
-        raise RuntimeError("Pi identity permissions must be 0600 in 0700 directory")
-    if not PUBLIC_KEY.is_file() or PUBLIC_KEY.is_symlink():
-        raise RuntimeError("Expected a regular pinned public recipient key")
-    derived = subprocess.run(
-        [str(AGE_EXE.parent / "age-keygen"), "-y", str(IDENTITY_FILE)],
-        capture_output=True, text=True, check=True, timeout=15,
-    ).stdout.strip()
-    if not secrets.compare_digest(derived, PUBLIC_KEY.read_text().strip()):
-        raise RuntimeError("Public recipient doesn't match Pi's private identity")
-
-
 def validate_run_details(details: dict, expected_sha: str) -> None:
     if details.get("headSha") != expected_sha:
         raise RuntimeError("Completed workflow commit did not match dispatched commit")
@@ -98,11 +74,24 @@ def validate_run_details(details: dict, expected_sha: str) -> None:
         raise RuntimeError("Missing, duplicated, or unexpected matrix job")
 
 
+def check_decrypted_report_binding(
+    decrypted: str, trace_id: str, commit: str, run_id: int,
+    platform: str, recipient_digest: str,
+) -> None:
+    """Prevent valid, signed ciphertext from a different run being replayed."""
+    expected = (
+        f"trace={trace_id}\ncommit={commit}\nrun={run_id}\n"
+        f"platform={platform}\nrecipient_sha256={recipient_digest}\n"
+    )
+    if not decrypted.startswith(expected):
+        raise RuntimeError("Encrypted report is bound to a different run or recipient")
+
+
 def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
-                          expected_sha: str, job_conclusions: dict) -> dict[str, str]:
+                          expected_sha: str, job_conclusions: dict,
+                          identity: EphemeralIdentity) -> dict[str, str]:
     if not AGE_EXE.is_file():
         raise RuntimeError("Pi-only decryption identity or age utility is unavailable")
-    verify_local_key()
     if job_conclusions.get("attest-ciphertext") != "success":
         raise RuntimeError("Ciphertext provenance signer did not complete successfully")
     catalog = json.loads(gh(
@@ -129,12 +118,15 @@ def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
             # who encrypted them. Verify GitHub OIDC/Sigstore provenance FIRST.
             verify_signed_ciphertext(gh, artifact, expected_sha)
             decrypted = subprocess.run(
-                [str(AGE_EXE), "--decrypt", "-i", str(IDENTITY_FILE), str(artifact)],
+                [str(AGE_EXE), "--decrypt", "-i", identity.identity_path,
+                 str(artifact)],
                 check=True, capture_output=True, timeout=30,
+                pass_fds=(identity.fd,),
             ).stdout.decode("utf-8", errors="replace")
-            header = f"trace={trace_id}\ncommit={expected_sha}\nrun={run_id}\nplatform={platform}\n"
-            if not decrypted.startswith(header):
-                raise RuntimeError(f"Encrypted report provenance mismatch for {platform}")
+            check_decrypted_report_binding(
+                decrypted, trace_id, expected_sha, run_id, platform,
+                identity.recipient_digest,
+            )
             if job_conclusions.get(platform) == "success" and f"PASS trace={trace_id}" not in decrypted:
                 raise RuntimeError(f"Successful job missing synthetic result: {platform}")
             if "=== Expected diagnostic failure (privacy test) (exit=47; expected=47) ===" not in decrypted:
@@ -174,7 +166,11 @@ def main() -> int:
     if not 30 <= args.timeout <= 3600:
         parser.error("--timeout must be 30 to 3600 seconds")
 
-    verify_local_key()
+    with ephemeral_identity() as identity:
+        return dispatch_and_collect(args, trace_id, identity)
+
+
+def dispatch_and_collect(args, trace_id: str, identity: EphemeralIdentity) -> int:
     local_sha = subprocess.run(["git", "rev-parse", "HEAD"],
                                check=True, capture_output=True, text=True,
                                cwd=OUTPUT_FILE.parent).stdout.strip()
@@ -187,6 +183,7 @@ def main() -> int:
         "workflow", "run", WORKFLOW, "--repo", REPO, "--ref", "main",
         "-f", f"trace_id={trace_id}",
         "-f", f"left={args.left}", "-f", f"right={args.right}",
+        "-f", f"age_recipient={identity.recipient}",
     )
 
     run_id = None
@@ -216,6 +213,7 @@ def main() -> int:
         "repository": REPO,
         "run_id": run_id,
         "head_sha": remote_sha,
+        "public_recipient_digest": identity.recipient_digest,
         "url": details.get("url"),
         "status": details.get("status"),
         "conclusion": details.get("conclusion"),
@@ -231,6 +229,7 @@ def main() -> int:
         result["encrypted_logs"] = retrieve_private_logs(
             run_id, trace_id, args.show_logs, remote_sha,
             {job["name"]: job.get("conclusion") for job in details["jobs"]},
+            identity,
         )
         write_status(result)
 

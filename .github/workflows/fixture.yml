@@ -16,6 +16,10 @@ on:
         description: Synthetic right operand
         required: true
         type: string
+      age_recipient:
+        description: Pi-generated, one-run-only PUBLIC age recipient
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -48,6 +52,7 @@ jobs:
           TRACE_ID: ${{ inputs.trace_id }}
           LEFT: ${{ inputs.left }}
           RIGHT: ${{ inputs.right }}
+          AGE_RECIPIENT: ${{ inputs.age_recipient }}
         run: python -m tools.run_encrypted_fixture
       - name: Upload ciphertext only (never plaintext)
         if: always()
