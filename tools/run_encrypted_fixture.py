@@ -10,7 +10,7 @@ import secrets
 import subprocess
 import sys
 
-from check_fixture import parse_request
+from tools.check_fixture import parse_request
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,4 +89,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception:
+        # GitHub displays uncaught tracebacks publicly; do not echo internal
+        # paths, exception messages, or plaintext diagnostics on failures.
+        print("Encrypted test wrapper failed (no private diagnostics printed)",
+              file=sys.stderr)
+        raise SystemExit(1)
