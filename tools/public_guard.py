@@ -34,6 +34,8 @@ ALLOWED_FILES = frozenset({
     "tools/log_transport.py",
     "tests/test_log_transport.py",
     "tools/pi_public_release.py",
+    "tools/private_release_publish.py",
+    "tests/test_private_release_publish.py",
 })
 
 # Known benign toy program; no private source or arbitrary repositories.

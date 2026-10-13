@@ -15,6 +15,13 @@ The earlier artifact ZIP upload/download, GitHub artifact deletion, and long-ter
 5. The Pi verifies that both GitHub jobs completed successfully, that the run's commit, workflow, actor, branch, run ID, recipient, platform, and synthetic canaries match, and then decrypts both reports locally.
 6. **On the Pi only**, the verified binaries are uploaded to a private **draft** GitHub Release; both are downloaded and SHA-256 checked before publication. The final private release retains all four assets. The Pi then mirrors it using `/home/pi/ci-release-vault/tools/sync_private_release.py` under `~/ci-artifacts/private-releases/<tag>/`, with private permissions and durable filesystem operations.
 
+Private publishing is **idempotent**. If an upload is interrupted, a retry
+checks the existing draft, accepts only matching SHA-256 assets, uploads only
+missing files, and refuses to overwrite or publish a tampered/partial release.
+Transient GitHub API failures are retried a limited number of times while the
+Pi still holds its one-time private key. If the process dies beforehand, rerun
+the public synthetic CI rather than trying to recover an erased key.
+
 The private Release is the canonical published output and is **not deleted** after download. The Pi keeps its own local copy indefinitely. GitHub job logs and workflow history may remain on the public repo, but they are *not* Actions artifacts.
 
 ## Verified public integration

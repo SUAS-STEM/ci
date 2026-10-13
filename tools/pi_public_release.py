@@ -4,20 +4,18 @@ No Actions artifacts, no public runner credentials for the private repository,
 and no confidential source. The PUBLIC job log temporarily carries ciphertext.
 """
 import argparse
-import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
 import time
 
 from .ephemeral_age import ephemeral_identity
 from .binary_envelope import unwrap_binary
 from .log_transport import parse_job_log
 from .check_fixture import parse_request
+from .private_release_publish import publish_private_release
 
 PUBLIC_REPO = "SUAS-STEM/ci-relay-lab"
 PRIVATE_REPO = "SUAS-STEM/ci-release-vault"
@@ -91,7 +89,6 @@ def publish_from_logs(identity, trace: str, run_id: int, source_sha: str,
     run, jobs = validate_job(run_id, source_sha, branch, workflow)
 
     binaries = {}
-    checksums = {}
     for platform, job_id in jobs.items():
         public_log = github_job_log(job_id)
         ciphertexts = parse_job_log(public_log, platform)
@@ -115,11 +112,7 @@ def publish_from_logs(identity, trace: str, run_id: int, source_sha: str,
         if not binary.startswith(b"MZ" if platform == "windows-2025" else b"\x7fELF"):
             raise RuntimeError("Compiled synthetic executable has incorrect format")
         binaries[ASSETS[platform]] = binary
-        checksums[ASSETS[platform]] = hashlib.sha256(binary).hexdigest()
 
-    repo = json.loads(gh("repo", "view", PRIVATE_REPO, "--json", "isPrivate"))
-    if repo.get("isPrivate") is not True:
-        raise RuntimeError("Refusing to publish into a public release repository")
     tag = f"ci-public{'-test' if test_branch else ''}-{run_id}-1"
     notes = (
         "PUBLIC SYNTHETIC ENCRYPTED CI -- no proprietary source.\n"
@@ -127,30 +120,19 @@ def publish_from_logs(identity, trace: str, run_id: int, source_sha: str,
         f"source-run={run_id}\nsource-attempt=1\n"
         f"source-workflow=.github/workflows/{workflow}\n"
     )
-    with tempfile.TemporaryDirectory(prefix="ci-private-release-", dir="/tmp") as folder:
-        output = Path(folder)
-        os.chmod(output, 0o700)
-        for name, data in binaries.items():
-            (output / name).write_bytes(data)
-            (output / (name + ".sha256")).write_text(
-                checksums[name] + "  " + name + "\n", encoding="ascii"
-            )
-        for item in output.iterdir():
-            item.chmod(0o600)
-        # The Pi's GitHub auth stays on Pi. Do not give it to any public job.
-        gh("release", "create", tag, "--repo", PRIVATE_REPO, "--target", "main",
-           "--draft", "--latest=false", "--title", f"Public encrypted CI {run_id}",
-           "--notes", notes)
-        gh("release", "upload", tag, "--repo", PRIVATE_REPO,
-           *(str(item) for item in sorted(output.iterdir())))
-        retrieved = output / "checked"
-        retrieved.mkdir(mode=0o700)
-        gh("release", "download", tag, "--repo", PRIVATE_REPO, "--dir", str(retrieved))
-        for name, digest in checksums.items():
-            if hashlib.sha256((retrieved / name).read_bytes()).hexdigest() != digest:
-                raise RuntimeError("Private GitHub release download mismatched original build")
-        gh("release", "edit", tag, "--repo", PRIVATE_REPO,
-           "--draft=false", "--latest=false")
+    # The Pi alone owns the private publishing token. Existing draft uploads
+    # can be resumed after a transient API failure without clobbering assets.
+    # Transient API failures must not strand a verified, partially uploaded
+    # draft. Re-fetch the draft and resume missing assets on the next attempt;
+    # never retry invalid content, changed provenance or unexpected releases.
+    for attempt in range(3):
+        try:
+            publish_private_release(gh, tag, notes, binaries)
+            break
+        except subprocess.CalledProcessError:
+            if attempt == 2:
+                raise
+            time.sleep(2 * (attempt + 1))
     # Protected private release remains as the durable origin. Keep a separate
     # Pi copy for continuity and readback. Do not delete the private Release.
     print(f"PRIVATE_RELEASE_OK https://github.com/{PRIVATE_REPO}/releases/tag/{tag}", flush=True)
