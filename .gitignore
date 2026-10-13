@@ -4,3 +4,4 @@ __pycache__/
 .ci-relay-lab-last-run.json
 .age-bin/
 encrypted-log.age
+encrypted-binary.age

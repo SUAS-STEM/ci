@@ -34,6 +34,7 @@ ALLOWED_FILES = frozenset({
     "tools/binary_envelope.py",
     "tools/pi_fixture_dispatch.py",
     "tools/pi_artifact_store.py",
+    "tools/pi_artifact_verify.py",
     "tools/pi_artifact_cleanup.py",
     "tools/public_guard.py",
     "tools/run_encrypted_fixture.py",

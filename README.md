@@ -54,6 +54,45 @@ previously saved runs whose GitHub cleanup was interrupted. It is safe to run
 after reboot without the original ephemeral decryption key. It is not installed
 as an unattended service until the protected PR is reviewed and merged.
 
+To audit retained Pi files for corruption, unexpected size changes, interrupted
+staging directories, and pending GitHub cleanup, run
+`python3 -m tools.pi_artifact_verify`. This reads files in bounded chunks,
+does not contact GitHub, and does not execute, delete, or modify artifacts.
+
+### Optional permanent encryption at rest
+
+The Pi can also store **every log and synthetic executable as a second `age`
+ciphertext** (`*.log.age`, `*.bin.age`, `*.exe.age`) rather than as plaintext.
+Create a long-term `age` recovery identity on a separate, trusted machine, and
+keep its **private** identity *off the Pi*. Transfer **only its public `age1…`
+recipient** into the file
+`~/.config/ci-relay-lab/archive-recipient.agepub` on the Pi, with mode `0600`.
+Once that valid file exists, future runs automatically use encrypted permanent
+archives (manifest schema 3); no fallback to plaintext occurs if encryption
+fails or the public-key file has unsafe permissions.
+
+An example public-key-only Pi installation (replace the placeholder with your
+own actual `age` public recipient):
+
+```sh
+install -d -m 700 ~/.config/ci-relay-lab
+printf '%s\n' 'age1YOUR_OFFLINE_RECOVERY_PUBLIC_KEY' > ~/.config/ci-relay-lab/archive-recipient.agepub
+chmod 600 ~/.config/ci-relay-lab/archive-recipient.agepub
+```
+
+The placeholder is deliberately invalid. Do not create the recovery private
+key on the Pi, paste it into a GitHub secret, or commit it anywhere. If the
+offline recovery private key is lost, encrypted permanent artifacts are also
+lost. To decrypt an archived file later, use the `age` program with that
+private identity on your trusted recovery computer. The Pi can still audit
+stored ciphertext and delete GitHub transfers without accessing the private
+recovery key. Existing unencrypted archives are **not** silently migrated.
+
+This protects stored files against a stolen Pi SSD without the off-device
+recovery key, but not against a live compromised Pi while builds are being
+decrypted, unencrypted swap, or any plaintext history written before enabling
+the option. It is not full-disk encryption.
+
 This prototype's archived artifacts are **public toy builds and diagnostics**,
 not compiled GCS binaries; the toy repository does not build proprietary GCS artifacts. Long-term
 confidential output on the Pi would additionally need encrypted storage and a

@@ -52,6 +52,9 @@ compile, decrypt, package, test or transmit nonpublic or proprietary source.
 - `tools/pi_artifact_cleanup.py --pending` finds verified archives whose
   GitHub cleanup was interrupted and safely retries their deletion. It rejects
   malformed cleanup receipts and corrupted local archives.
+- `python3 -m tools.pi_artifact_verify` audits permanent Pi archives using
+  bounded, streaming file hashes and detects corruption, incomplete staging
+  directories, and missing GitHub cleanup receipts. It never executes binaries.
 - The Pi retrieves each artifact ZIP from GitHub's API, verifies the exact
   published ZIP SHA-256 and byte count, then inspects it using a bounded ZIP
   parser. Only the two exact files `encrypted-log.age` and
@@ -100,6 +103,16 @@ dashboard may safely display coarse non-sensitive status only.
   Their Unix permissions do not provide at-rest encryption against disk theft,
   malware, or privileged local users. Use full-disk encryption or an encrypted
   dedicated volume if real confidential artifacts are stored on trusted compute.
+- **Optional offline-key Pi archive mode** (`archive-recipient.agepub`) re-encrypts
+  verified logs and binaries under a separate `age` public recipient, retaining
+  only ciphertext on the SSD. The recovery private identity must remain on a
+  different machine. If the public-key configuration is invalid, archive
+  creation fails closed; GitHub transfers are not deleted. A manifest schema-3
+  archive records ciphertext hashes so GitHub cleanup can complete without the
+  private recovery key. Existing plaintext archives are not migrated.
+- The Pi currently has an unencrypted ext4 root volume and disk-backed swap;
+  optional archive encryption is not a substitute for encrypted swap or FDE.
+  Plaintext may remain in process memory/swap while a live CI run is decrypted.
 - Each run's private identity lives in anonymous Pi kernel memory, which is
   closed after the dispatcher exits. Old ciphertext cannot be read with a
   later run's key. The Pi locks the identity's memory pages against swap,

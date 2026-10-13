@@ -11,7 +11,14 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
+import subprocess
 import tempfile
+
+try:
+    from .ephemeral_age import is_age_recipient
+except ImportError:
+    from ephemeral_age import is_age_recipient
 
 
 ARCHIVE_ROOT = Path.home() / "ci-artifacts" / "ci-relay-lab"
@@ -20,6 +27,39 @@ MAX_LOG_BYTES = 20 * 1024 * 1024
 BINARY_FILENAMES = {"ubuntu-24.04": "ubuntu-24.04.bin",
                     "windows-2025": "windows-2025.exe"}
 MAX_BINARY_BYTES = 8 * 1024 * 1024
+MAX_MANIFEST_BYTES = 16 * 1024
+MAX_RECEIPT_BYTES = 4 * 1024
+AGE_EXE = Path(__file__).resolve().parents[1] / ".age-bin" / "age"
+ARCHIVE_RECIPIENT_FILE = Path.home() / ".config" / "ci-relay-lab" / "archive-recipient.agepub"
+
+
+def configured_archive_recipient(path: Path = ARCHIVE_RECIPIENT_FILE) -> str | None:
+    """Read an optional *public* offline recovery recipient; no secret on Pi.
+
+    Missing is legacy plaintext compatibility, malformed/unsafe configuration
+    fails closed instead of silently writing plaintext to the Pi's SSD.
+    """
+    if not path.exists() and not path.is_symlink():
+        return None
+    with _open_verified_file(path, 512) as source:
+        recipient = source.read().decode("ascii").strip()
+    if not is_age_recipient(recipient):
+        raise RuntimeError("Invalid offline archive recovery public recipient")
+    return recipient
+
+
+def _encrypt_for_offline_recipient(data: bytes, recipient: str) -> bytes:
+    if not is_age_recipient(recipient) or not AGE_EXE.is_file():
+        raise RuntimeError("Offline archive encryption unavailable; refusing plaintext fallback")
+    result = subprocess.run(
+        [str(AGE_EXE), "-r", recipient, "-"],
+        input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=40, check=True,
+    )
+    ciphertext = result.stdout
+    if not ciphertext.startswith(b"age-encryption.org/v1\n"):
+        raise RuntimeError("Offline encryption did not produce age ciphertext")
+    return ciphertext
 
 
 def _private_dir(directory: Path, create: bool = False) -> None:
@@ -61,6 +101,52 @@ def _json_bytes(value: dict) -> bytes:
     return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode("utf-8")
 
 
+def _open_verified_file(path: Path, maximum: int):
+    """Open an owned regular archive member without symlink/race traversal."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        raise RuntimeError("Cannot safely open Pi archive member") from exc
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or not 0 < info.st_size <= maximum):
+            raise RuntimeError("Untrusted file type, permissions or size in Pi archive")
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _read_json_member(path: Path, limit: int) -> dict:
+    with _open_verified_file(path, limit) as source:
+        value = json.load(source)
+    if not isinstance(value, dict):
+        raise RuntimeError("Malformed archived JSON metadata")
+    return value
+
+
+def _verified_file_digest(path: Path, size: int, digest: str,
+                          maximum: int) -> None:
+    if (type(size) is not int or not 0 < size <= maximum
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None):
+        raise RuntimeError("Invalid archived file size or checksum metadata")
+    with _open_verified_file(path, maximum) as source:
+        if os.fstat(source.fileno()).st_size != size:
+            raise RuntimeError("Pi archive size mismatch")
+        checksum = hashlib.sha256()
+        total = 0
+        while chunk := source.read(min(1024 * 1024, maximum + 1 - total)):
+            total += len(chunk)
+            if total > maximum:
+                raise RuntimeError("Pi archive unexpectedly exceeds size limit")
+            checksum.update(chunk)
+    if total != size or checksum.hexdigest() != digest:
+        raise RuntimeError("Pi archive hash or size mismatch")
+
+
 def _validate_identity(run_id: int, trace: str, sha: str, recipient_sha: str) -> None:
     if type(run_id) is not int or run_id <= 0:
         raise ValueError("Invalid run ID")
@@ -74,6 +160,7 @@ def archive_run(
     root: Path, run_id: int, trace: str, sha: str, recipient_sha: str,
     logs: dict[str, str], artifact_ids: dict[str, int],
     binaries: dict[str, bytes | None] | None = None,
+    archive_recipient: str | None = None,
 ) -> Path:
     """Make an immutable, verified run directory. Never overwrite a run."""
     _validate_identity(run_id, trace, sha, recipient_sha)
@@ -101,6 +188,14 @@ def archive_run(
                 binary_status[platform] = "present"
             else:
                 raise ValueError("Invalid compiled synthetic binary bytes")
+    if archive_recipient is not None:
+        if binaries is None:
+            raise ValueError("Encrypted permanent archives require explicit binary status")
+        if not is_age_recipient(archive_recipient):
+            raise ValueError("Invalid offline recovery age recipient")
+        payloads = {name + ".age": _encrypt_for_offline_recipient(data, archive_recipient)
+                    for name, data in payloads.items()}
+        schema = 3
     manifest = {
         "schema": schema,
         "repository": "SUAS-STEM/ci-relay-lab",
@@ -113,9 +208,16 @@ def archive_run(
     }
     if binary_status is not None:
         manifest["binary_status"] = binary_status
+    if archive_recipient is not None:
+        manifest["storage_encryption"] = {
+            "format": "age-x25519",
+            "recipient_sha256": hashlib.sha256(archive_recipient.encode("ascii")).hexdigest(),
+        }
     _prepare_root(root)
     destination = root / f"run-{run_id}"
     if destination.exists() or destination.is_symlink():
+        if archive_recipient is not None:
+            raise RuntimeError("Refusing to overwrite an existing encrypted archive")
         if read_verified_archive(root, run_id) != manifest:
             raise RuntimeError("Refusing to replace different local run data")
         return destination
@@ -152,21 +254,11 @@ def read_verified_archive(root: Path, run_id: int) -> dict:
     entries = {item.name for item in run.iterdir()}
     expected_names = {"manifest.json", "ubuntu-24.04.log", "windows-2025.log"}
     manifest_path = run / "manifest.json"
-    for name in ("manifest.json",):
-        path = run / name
-        info = path.lstat()
-        if not path.is_file() or path.is_symlink() or info.st_uid != os.getuid() or (info.st_mode & 0o777) != 0o600:
-            raise RuntimeError("Untrusted local artifact file")
     cleanup_receipt = None
     if "github-cleanup.json" in entries:
-        receipt = run / "github-cleanup.json"
-        info = receipt.lstat()
-        if (not receipt.is_file() or receipt.is_symlink()
-                or info.st_uid != os.getuid() or (info.st_mode & 0o777) != 0o600):
-            raise RuntimeError("Untrusted GitHub cleanup receipt")
-        cleanup_receipt = json.loads(receipt.read_text("utf-8"))
-    manifest = json.loads(manifest_path.read_text("utf-8"))
-    if manifest.get("schema") == 2:
+        cleanup_receipt = _read_json_member(run / "github-cleanup.json", MAX_RECEIPT_BYTES)
+    manifest = _read_json_member(manifest_path, MAX_MANIFEST_BYTES)
+    if manifest.get("schema") in (2, 3):
         status = manifest.get("binary_status")
         if not isinstance(status, dict) or set(status) != set(PLATFORMS) or any(
             value not in ("present", "missing") for value in status.values()
@@ -176,6 +268,15 @@ def read_verified_archive(root: Path, run_id: int) -> dict:
                               if status[p] == "present")
     elif manifest.get("schema") != 1:
         raise RuntimeError("Unsupported Pi archive manifest schema")
+    if manifest.get("schema") == 3:
+        storage = manifest.get("storage_encryption")
+        if (not isinstance(storage, dict)
+                or storage.get("format") != "age-x25519"
+                or not isinstance(storage.get("recipient_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", storage["recipient_sha256"])):
+            raise RuntimeError("Invalid at-rest archive encryption metadata")
+        expected_names = {name + ".age" if name != "manifest.json" else name
+                          for name in expected_names}
     if entries - {"github-cleanup.json"} != expected_names:
         raise RuntimeError("Archive contains missing or unexpected files")
     _validate_identity(manifest["run_id"], manifest["trace"], manifest["commit"],
@@ -193,16 +294,18 @@ def read_verified_archive(root: Path, run_id: int) -> dict:
     if set(manifest.get("files", {})) != expected_names - {"manifest.json"}:
         raise RuntimeError("Missing verified local artifact hashes")
     for name, description in manifest["files"].items():
-        path = run / name
-        info = path.lstat()
-        if not path.is_file() or path.is_symlink() or info.st_uid != os.getuid() or (info.st_mode & 0o777) != 0o600:
-            raise RuntimeError("Untrusted local artifact file")
-        data = path.read_bytes()
-        maximum = MAX_BINARY_BYTES if name in BINARY_FILENAMES.values() else MAX_LOG_BYTES
-        if not 0 < len(data) <= maximum or len(data) != description["bytes"]:
-            raise RuntimeError("Local artifact size mismatch")
-        if hashlib.sha256(data).hexdigest() != description["sha256"]:
-            raise RuntimeError("Local artifact checksum mismatch")
+        if not isinstance(description, dict):
+            raise RuntimeError("Malformed archive file metadata")
+        base_name = name.removesuffix(".age")
+        maximum = MAX_BINARY_BYTES if base_name in BINARY_FILENAMES.values() else MAX_LOG_BYTES
+        if manifest.get("schema") == 3:
+            maximum += 4096
+        _verified_file_digest(run / name, description.get("bytes"),
+                              description.get("sha256"), maximum)
+        if manifest.get("schema") == 3:
+            with _open_verified_file(run / name, maximum) as source:
+                if source.read(22) != b"age-encryption.org/v1\n":
+                    raise RuntimeError("Expected sealed age file in encrypted Pi archive")
     return manifest
 
 

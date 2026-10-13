@@ -19,7 +19,8 @@ try:
     from .artifact_verification import (validate_catalog, verify_signed_ciphertext,
                                         extract_ciphertext_bundle)
     from .ephemeral_age import ephemeral_identity, EphemeralIdentity
-    from .pi_artifact_store import ARCHIVE_ROOT, archive_run
+    from .pi_artifact_store import (ARCHIVE_ROOT, archive_run,
+                                    configured_archive_recipient)
     from .pi_artifact_cleanup import cleanup_github_artifacts
     from .binary_envelope import unwrap_binary
 except ImportError:
@@ -27,7 +28,8 @@ except ImportError:
     from artifact_verification import (validate_catalog, verify_signed_ciphertext,
                                        extract_ciphertext_bundle)
     from ephemeral_age import ephemeral_identity, EphemeralIdentity
-    from pi_artifact_store import ARCHIVE_ROOT, archive_run
+    from pi_artifact_store import (ARCHIVE_ROOT, archive_run,
+                                   configured_archive_recipient)
     from pi_artifact_cleanup import cleanup_github_artifacts
     from binary_envelope import unwrap_binary
 
@@ -179,7 +181,8 @@ def retrieve_private_logs(run_id: int, trace_id: str, show: bool,
         }
         destination = archive_run(ARCHIVE_ROOT, run_id, trace_id, expected_sha,
                                   identity.recipient_digest, private_logs,
-                                  artifact_ids, binaries=private_binaries)
+                                  artifact_ids, binaries=private_binaries,
+                                  archive_recipient=configured_archive_recipient())
         print(f"Verified long-term Pi copy: {destination}", flush=True)
 
         # Deletion only happens after durable storage succeeded. On an API
