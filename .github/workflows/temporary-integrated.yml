@@ -1,0 +1,101 @@
+name: Temporary signed ciphertext integration test
+run-name: fixture-${{ inputs.trace_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      trace_id:
+        description: Non-sensitive test identifier (alphanumeric and hyphens)
+        required: true
+        type: string
+      left:
+        description: Synthetic left operand
+        required: true
+        type: string
+      right:
+        description: Synthetic right operand
+        required: true
+        type: string
+      age_recipient:
+        description: Pi-generated, one-run-only PUBLIC age recipient
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: synthetic-lab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/security/signed-artifact-provenance' && github.event_name == 'workflow_dispatch' && github.actor == 'eschan145'
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - name: Checkout public synthetic project
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Reject nonpublic source or unapproved workflow context
+        run: python -m tools.public_guard --tree-only
+      - name: Install checksum-verified age encryption utility
+        run: python tools/install_age.py
+      - name: Capture and encrypt all synthetic build/test output
+        env:
+          TRACE_ID: ${{ inputs.trace_id }}
+          LEFT: ${{ inputs.left }}
+          RIGHT: ${{ inputs.right }}
+          AGE_RECIPIENT: ${{ inputs.age_recipient }}
+        run: python -m tools.run_encrypted_fixture
+      - name: Upload ciphertext only (never plaintext)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-diagnostics-${{ matrix.os }}
+          path: encrypted-log.age
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  attest-ciphertext:
+    # Separate privilege boundary: compilation/test runners cannot issue
+    # provenance certificates and this job never checks out or runs source.
+    name: attest-ciphertext
+    if: always() && github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/security/signed-artifact-provenance' && github.event_name == 'workflow_dispatch' && github.actor == 'eschan145'
+    needs: [test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download Linux ciphertext only
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: encrypted-diagnostics-ubuntu-24.04
+          path: ciphertext/linux
+      - name: Download Windows ciphertext only
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: encrypted-diagnostics-windows-2025
+          path: ciphertext/windows
+      - name: Sign GitHub OIDC provenance for Linux ciphertext
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: ciphertext/linux/encrypted-log.age
+          show-summary: false
+      - name: Sign GitHub OIDC provenance for Windows ciphertext
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: ciphertext/windows/encrypted-log.age
+          show-summary: false
