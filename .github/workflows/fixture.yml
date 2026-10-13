@@ -72,6 +72,7 @@ jobs:
       actions: read
       id-token: write
       attestations: write
+      artifact-metadata: write
     steps:
       - name: Download Linux ciphertext only
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
