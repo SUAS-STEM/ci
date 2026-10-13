@@ -85,5 +85,5 @@ dashboard may safely display coarse non-sensitive status only.
   available, dispatch fails closed. Interrupting the Pi dispatcher irrecoverably
   loses the key. This is not a hardware boundary: privileged Pi/root access,
   malicious kernel modules and compromised child processes remain risks.
-  Older **synthetic-only** test runs used a persistent identity that has no role
-  in the newer per-run protocol.
+  Older **synthetic-only** test runs used a persistent identity, now deleted
+  from the Pi. Those historical test artifacts can no longer be decrypted.

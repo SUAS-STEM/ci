@@ -41,8 +41,8 @@ Previous artifacts cannot be decrypted after
 that key is discarded. **If the dispatcher process dies, that run's logs are
 permanently unavailable; restart a fresh run.**
 
-The previous test's legacy persistent age identity exists only on the Pi for
-historical synthetic artifacts; the current protocol never reads it.
+The unused legacy persistent identity from early synthetic-only tests was
+deleted from the Pi; those old test artifacts are no longer decryptable.
 Privileged kernel/root access and compromised processes remain threats; this
 is not hardware-backed key protection.
 
