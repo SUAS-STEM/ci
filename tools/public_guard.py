@@ -15,7 +15,6 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_FILES = frozenset({
     ".github/workflows/fixture.yml",
-    ".github/workflows/temporary-integrated.yml",
     ".github/workflows/security-review.yml",
     ".gitignore",
     "CMakeLists.txt",
