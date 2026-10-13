@@ -43,7 +43,7 @@ class PublicGuardTest(unittest.TestCase):
 
     def test_windows_crlf_checkout_preserves_public_fixture_hash(self):
         original = (public_guard.ROOT / "src/synthetic_adder.cpp").read_bytes()
-        windows_bytes = original.replace(b"\n", b"\r\n")
+        windows_bytes = original.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         self.assertEqual(public_guard.public_text_digest(original),
                          public_guard.public_text_digest(windows_bytes))
 
