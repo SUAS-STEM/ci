@@ -18,26 +18,25 @@ ROOT = Path(__file__).resolve().parents[1]
 PUBKEY_FILE = ROOT / "keys" / "pi-logs.agepub"
 AGE_EXE = ROOT / ".age-bin" / ("age.exe" if os.name == "nt" else "age")
 OUTPUT = ROOT / "encrypted-log.age"
-SAFE_ENV_KEYS = frozenset({
-    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP",
-    "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
-    "LOCALAPPDATA", "APPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
-    "PROGRAMW6432", "PROGRAMDATA", "ALLUSERSPROFILE", "SYSTEMDRIVE",
-    "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)",
-    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
-    "OS", "LANG", "LC_ALL", "PYTHONIOENCODING",
-    # Visual Studio toolchain discovery; do not include GitHub/ACTIONS auth vars.
-    "VSINSTALLDIR", "VISUALSTUDIOVERSION", "VCINSTALLDIR",
-    "VCTOOLSINSTALLDIR", "VCTOOLSVERSION", "VS170COMNTOOLS",
-    "WINDOWSSDKDIR", "WINDOWSSDKVERSION", "UNIVERSALCRTSDKDIR",
-    "UCRTVERSION", "INCLUDE", "LIB", "LIBPATH",
-})
+BLOCKED_ENV_PREFIXES = (
+    "GITHUB_", "ACTIONS_", "RUNNER_", "INPUT_", "GH_", "AWS_",
+    "AZURE_", "GOOGLE_", "NPM_", "PIP_", "DOCKER_",
+)
+BLOCKED_ENV_WORDS = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL",
+                     "AUTH", "PRIVATE", "API_KEY", "ACCESS_KEY")
 
 
 def sanitized_build_environment(source: dict[str, str]) -> dict[str, str]:
-    """Don't pass hosted-runner auth tokens/config to a build subprocess."""
-    return {key: value for key, value in source.items()
-            if key.upper() in SAFE_ENV_KEYS}
+    """Strip credential-like variables but preserve Visual Studio discovery.
+
+    The public *toy* project must not be mistaken for an isolation boundary.
+    Private/untrusted source must not be run on public GitHub hosted runners.
+    """
+    return {
+        key: value for key, value in source.items()
+        if not key.upper().startswith(BLOCKED_ENV_PREFIXES)
+        and not any(word in key.upper() for word in BLOCKED_ENV_WORDS)
+    }
 
 
 def main() -> int:
@@ -92,12 +91,7 @@ def main() -> int:
         raise RuntimeError("Unrecognized GitHub runner context")
     chunks.append(f"trace={trace}\ncommit={sha}\nrun={run_id}\nplatform={platform_name}\ncanary={canary}\n".encode())
     capture("Python input validation", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"])
-    configure = ["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"]
-    if os.name == "nt":
-        # Explicit generator avoids inheriting a Visual Studio developer-shell
-        # environment (including its privileged, unrelated variables).
-        configure.extend(["-G", "Visual Studio 17 2022", "-A", "x64"])
-    capture("CMake configure", configure)
+    capture("CMake configure", ["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"])
     capture("C++ compile", ["cmake", "--build", "build", "--config", "Release", "--parallel", "2"])
     capture("CTest", ["ctest", "--test-dir", "build", "-C", "Release", "--output-on-failure"])
     env = dict(base_env)

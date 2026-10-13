@@ -40,8 +40,9 @@ means existing encrypted artifacts cannot be decrypted.
 The runner executes fixed, public C++ build/test commands with subprocess
 stdout/stderr captured in memory, then encrypts that stream with age. Even a
 deliberate failed test (exit 47) and randomized canary remain in ciphertext.
-Build/test subprocesses receive a minimal allowlisted environment, excluding
-the runner's `GITHUB_TOKEN`, `ACTIONS_RUNTIME_TOKEN`, and unrelated variables.
+Build/test subprocesses receive a sanitized environment that excludes
+runner tokens and credential-like variables while preserving compiler discovery
+metadata needed by Windows CMake. This filter is defense in depth, not isolation.
 After upload, the Pi downloads each platform's artifact and decrypts locally.
 GitHub still exposes job names, run status, workflow metadata and any output
 produced *outside* that capture wrapper. This proves the test wrapper works;

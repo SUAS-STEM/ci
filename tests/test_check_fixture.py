@@ -55,9 +55,11 @@ class HostileDispatchTest(unittest.TestCase):
         hostile_env = {
             "GITHUB_TOKEN": "never-export-me", "ACTIONS_RUNTIME_TOKEN": "nope",
             "MY_SECRET": "not-for-children", "PATH": "/usr/bin", "HOME": "/tmp",
+            "VSINSTALLDIR": "C:\\VisualStudio", "VisualStudioVersion": "17.0",
         }
         actual = run_encrypted_fixture.sanitized_build_environment(hostile_env)
-        self.assertEqual(actual, {"PATH": "/usr/bin", "HOME": "/tmp"})
+        self.assertEqual(actual, {"PATH": "/usr/bin", "HOME": "/tmp",
+                                  "VSINSTALLDIR": "C:\\VisualStudio", "VisualStudioVersion": "17.0"})
 
 
 if __name__ == "__main__":
