@@ -28,7 +28,7 @@ jobs:
   encrypted-msvc:
     if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/main' && github.actor == 'eschan145' && github.event_name == 'workflow_dispatch'
     name: opaque-windows-msvc
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 35
     permissions:
       contents: write  # ONLY the public transfer draft, never private repos
