@@ -55,8 +55,9 @@ def decrypt(identity, ciphertext: bytes) -> bytes:
 
 def validate_job(run_id: int, source_sha: str, branch: str, workflow: str):
     run = json.loads(gh("api", f"repos/{PUBLIC_REPO}/actions/runs/{run_id}"))
+    expected_event = "push" if branch == TEST_BRANCH else "workflow_dispatch"
     if (run.get("head_sha") != source_sha or run.get("head_branch") != branch
-            or run.get("event") != "workflow_dispatch"
+            or run.get("event") != expected_event
             or run.get("path") != ".github/workflows/" + workflow
             or run.get("actor", {}).get("login") != "eschan145"
             or run.get("status") != "completed"

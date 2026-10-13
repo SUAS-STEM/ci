@@ -1,25 +1,10 @@
 name: Temporary PUBLIC encrypted release integration proof
-run-name: fixture-${{ inputs.trace_id }}
+run-name: fixture-test-c0fc0e376968
 
 on:
-  workflow_dispatch:
-    inputs:
-      trace_id:
-        description: Non-sensitive test identifier (alphanumeric and hyphens)
-        required: true
-        type: string
-      left:
-        description: Synthetic left operand
-        required: true
-        type: string
-      right:
-        description: Synthetic right operand
-        required: true
-        type: string
-      age_recipient:
-        description: Pi-generated, one-run-only PUBLIC age recipient
-        required: true
-        type: string
+  push:
+    branches:
+      - security/signed-artifact-provenance
 
 permissions:
   contents: read
@@ -30,7 +15,7 @@ concurrency:
 
 jobs:
   test:
-    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/security/signed-artifact-provenance' && github.event_name == 'workflow_dispatch' && github.actor == 'eschan145'
+    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/security/signed-artifact-provenance' && github.event_name == 'push' && github.actor == 'eschan145'
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 12
@@ -49,10 +34,10 @@ jobs:
         run: python tools/install_age.py
       - name: Capture and encrypt all synthetic build/test output
         env:
-          TRACE_ID: ${{ inputs.trace_id }}
-          LEFT: ${{ inputs.left }}
-          RIGHT: ${{ inputs.right }}
-          AGE_RECIPIENT: ${{ inputs.age_recipient }}
+          TRACE_ID: test-c0fc0e376968
+          LEFT: 17
+          RIGHT: -3
+          AGE_RECIPIENT: age15rseadxntkr7qq06ulpwp9cp58qydtaqu2e6z9m8c455r46wzykq436q4g
         run: python -m tools.run_encrypted_fixture
       - name: Emit age ciphertext to GitHub CI logs for trusted Pi collection
         if: always()
