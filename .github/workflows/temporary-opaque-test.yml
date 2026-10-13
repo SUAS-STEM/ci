@@ -1,0 +1,33 @@
+name: Temporary encrypted Windows MSVC synthetic integration
+run-name: opaque-4b2809fde26408c85a0c10d6
+on:
+  push:
+    branches: [security/signed-artifact-provenance]
+permissions:
+  contents: read
+jobs:
+  opaque-windows-msvc:
+    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/security/signed-artifact-provenance' && github.actor == 'eschan145' && github.event_name == 'push'
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout vetted public relay code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Public-only source guard
+        shell: pwsh
+        run: python -m tools.public_guard --tree-only
+      - name: Install pinned age crypto
+        shell: pwsh
+        run: python tools/install_age.py
+      - name: Compile decrypted synthetic source and return encrypted output
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_NONCE: 4b2809fde26408c85a0c10d6
+          CI_PRIVATE_SHA: 666e82d372e81ece88bd5391396af71ac1d5b3c1
+          CI_OUTPUT_RECIPIENT: age1xpzjp9jpkqj3uzsmmemq84un6eseaxqf2ehjm3w466mzu6vsgekqs9x9ra
+        run: python -m tools.opaque_runner
