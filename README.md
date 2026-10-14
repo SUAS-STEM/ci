@@ -66,6 +66,15 @@ validates and decrypts the results, publishes the actual binary, private
 build log, checksum, and provenance into a PRIVATE Release, and deletes the
 temporary PUBLIC ciphertext prerelease. **Zero Actions artifacts are used.**
 
+The private coordinator first creates one exact ZIP containing a fresh 256-bit
+secret commitment salt, then dispatches the **SHA-256 of that salted ZIP** as
+public metadata. The public worker compares the hash of the decrypted ZIP
+before unpacking or executing anything. This prevents an untrusted public
+Release asset writer from substituting different source or PowerShell inputs
+that merely reuse the published nonce and private commit SHA. The salt is
+inside the encrypted ZIP, not an Actions workflow input. This protection is
+only as strong as the reviewed workflow and its runner execution.
+
 The real public `windows-2022` MSVC run
 [38478171900](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38478171900)
 succeeded using **only synthetic** source and `.ps1` from the isolated private

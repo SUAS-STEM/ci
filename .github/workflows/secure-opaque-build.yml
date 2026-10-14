@@ -16,6 +16,10 @@ on:
         description: Private coordinator's one-time PUBLIC age recipient
         required: true
         type: string
+      source_bundle_sha256:
+        description: SHA256 commitment to the exact private source and PS1 archive
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -51,6 +55,7 @@ jobs:
           CI_NONCE: ${{ inputs.nonce }}
           CI_PRIVATE_SHA: ${{ inputs.source_commit }}
           CI_OUTPUT_RECIPIENT: ${{ inputs.output_recipient }}
+          CI_BUNDLE_SHA256: ${{ inputs.source_bundle_sha256 }}
         run: python -m tools.opaque_runner
       # Source, build.ps1, binaries, and captured diagnostics are transferred
       # as encrypted files inside a short-lived PUBLIC prerelease.

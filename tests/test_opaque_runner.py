@@ -14,7 +14,8 @@ from tools.opaque_runner import (read_packet, RECIPIENT, MARKER,
                                  capture_private_build, oidc_audience,
                                  oidc_result_audience,
                                  github_runner_oidc, trusted_source_asset,
-                                 receive_encrypted_source, safe_bundle_name)
+                                 receive_encrypted_source, safe_bundle_name,
+                                 verify_bundle_commitment)
 
 
 class OpaquePacketTests(unittest.TestCase):
@@ -27,6 +28,7 @@ class OpaquePacketTests(unittest.TestCase):
             archive.writestr("manifest.json", json.dumps({
                 "nonce": nonce or self.NONCE,
                 "source_commit": self.SHA,
+                "commitment_salt": "e" * 64,
                 "output": "ci-out/program.exe",
             }))
             archive.writestr("build.ps1", b"Write-Output 'test'")
@@ -36,6 +38,20 @@ class OpaquePacketTests(unittest.TestCase):
     def test_valid_private_packet(self):
         files = read_packet(self.packet(), self.NONCE, self.SHA)
         self.assertEqual(files["src/sample.cpp"], b"int main(){}")
+
+    def test_privately_committed_zip_hash_blocks_substitution(self):
+        import hashlib
+        original = self.packet()
+        digest = hashlib.sha256(original).hexdigest()
+        self.assertIsNone(verify_bundle_commitment(original, digest))
+        malicious = self.packet(content=b"int main(){return 42;}")
+        self.assertNotEqual(original, malicious)
+        self.assertEqual(read_packet(malicious, self.NONCE, self.SHA)[
+            "src/sample.cpp"], b"int main(){return 42;}")
+        with self.assertRaisesRegex(ValueError, "private build commitment"):
+            verify_bundle_commitment(malicious, digest)
+        with self.assertRaisesRegex(ValueError, "private build commitment"):
+            verify_bundle_commitment(original, "not-a-sha256")
 
     def test_cmake_root_file_is_permitted(self):
         files = read_packet(self.packet("CMakeLists.txt"), self.NONCE, self.SHA)

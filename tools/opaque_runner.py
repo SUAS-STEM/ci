@@ -6,6 +6,7 @@ This is NOT protection against privileged runner infrastructure access.
 """
 
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -151,6 +152,8 @@ def read_packet(blob, nonce, source_commit):
     manifest = json.loads(files.pop("manifest.json"))
     if (manifest.get("nonce") != nonce
             or manifest.get("source_commit") != source_commit
+            or not isinstance(manifest.get("commitment_salt"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", manifest["commitment_salt"]) is None
             or manifest.get("output") != "ci-out/program.exe"):
         raise ValueError("Build package provenance mismatch")
     return files
@@ -249,6 +252,21 @@ def receive_encrypted_source(tag, work, *, retries=150):
     raise TimeoutError("Encrypted build input was not received")
 
 
+def verify_bundle_commitment(data, expected_sha256):
+    """Require the exact privately committed plaintext ZIP, not just its nonce.
+
+    Without this, a public Release asset writer could encrypt a different
+    source bundle to the authenticated runner key and spoof the public nonce
+    and source commit fields. The expected digest comes from workflow dispatch.
+    """
+    if (not isinstance(expected_sha256, str)
+            or re.fullmatch(r"[a-f0-9]{64}", expected_sha256) is None
+            or not isinstance(data, bytes)
+            or not hmac.compare_digest(hashlib.sha256(data).hexdigest(),
+                                        expected_sha256)):
+        raise ValueError("Decrypted source differs from private build commitment")
+
+
 def _install_and_build(nonce, source_commit, recipient, keyfile, work):
     tag = "ci-opaque-" + nonce
     incoming = receive_encrypted_source(tag, work)
@@ -256,6 +274,7 @@ def _install_and_build(nonce, source_commit, recipient, keyfile, work):
         [str(AGE), "-d", "-i", str(keyfile), str(incoming)],
         check=True, capture_output=True, timeout=30,
     ).stdout
+    verify_bundle_commitment(decrypted, os.environ["CI_BUNDLE_SHA256"])
     files = read_packet(decrypted, nonce, source_commit)
     incoming.unlink()
     unpack_into(files, work)
@@ -299,8 +318,10 @@ def main():
     nonce = os.environ["CI_NONCE"]
     sha = os.environ["CI_PRIVATE_SHA"]
     recipient = os.environ["CI_OUTPUT_RECIPIENT"]
+    bundle_digest = os.environ["CI_BUNDLE_SHA256"]
     if (not re.fullmatch(r"[0-9a-f]{24}", nonce)
             or not re.fullmatch(r"[0-9a-f]{40}", sha)
+            or not re.fullmatch(r"[0-9a-f]{64}", bundle_digest)
             or RECIPIENT.fullmatch(recipient) is None
             or os.environ.get("GITHUB_REPOSITORY") != PUBLIC_REPO):
         raise ValueError("Unsafe encrypted build metadata")
