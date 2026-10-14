@@ -79,7 +79,7 @@ class StagedMSVCFailureTests(unittest.TestCase):
 
             diagnostics = b"error C2065: 'synthetic': undeclared identifier\r\n"
 
-            def failing_build(work, child_env):
+            def failing_build(work, child_env, *, on_chunk=None):
                 for forbidden in ("GH_TOKEN", "GITHUB_TOKEN",
                                   "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_ENV"):
                     self.assertNotIn(forbidden, child_env)

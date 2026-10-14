@@ -1,4 +1,4 @@
-"""The PUBLIC MSVC build step must have no GitHub repository token env.
+"""PUBLIC compiler children must not inherit the transport GitHub token.
 
 Unit tests use a synthetic ZIP and real local age keys when available, but
 NEVER dispatch GitHub Actions or access private user source.
@@ -78,7 +78,7 @@ class StagedMSVCWorkflowTests(unittest.TestCase):
                                         input=source, capture_output=True,
                                         check=True).stdout
                 target.write_bytes(cipher)
-            def fake_build(work, run_env):
+            def fake_build(work, run_env, *, on_chunk=None):
                 for name in ("GH_TOKEN", "GITHUB_TOKEN",
                              "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_ENV",
                              "GITHUB_PATH", "ACTIONS_RUNTIME_TOKEN"):
@@ -126,7 +126,7 @@ class StagedMSVCWorkflowTests(unittest.TestCase):
             self.assertEqual(status["binary_sha256"], hashlib.sha256(binary).hexdigest())
             self.assertNotIn(b"public MSVC log", b"".join(transfers.values()))
 
-    def test_refuse_github_token_during_compilation(self):
+    def test_refuse_implicit_github_token_during_compilation(self):
         with tempfile.TemporaryDirectory() as scratch:
             env = {
                 "CI_NONCE": NONCE, "CI_PRIVATE_SHA": SHA,
@@ -134,10 +134,10 @@ class StagedMSVCWorkflowTests(unittest.TestCase):
                 "CI_BUNDLE_SHA256": "b" * 64,
                 "GITHUB_REPOSITORY": relay.PUBLIC_REPO,
                 "RUNNER_TEMP": scratch,
-                "GH_TOKEN": "SHOULD_NOT_EXIST",
+                "GITHUB_TOKEN": "SHOULD_NOT_EXIST",
             }
             with patch.dict(os.environ, env, clear=True):
-                with self.assertRaisesRegex(RuntimeError, "No GitHub repository token"):
+                with self.assertRaisesRegex(RuntimeError, "Unexpected implicit GitHub token"):
                     worker.compile_private()
 
 

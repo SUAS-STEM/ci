@@ -97,14 +97,26 @@ public prerelease and one-time branch test workflow were removed afterward.
 
 For token isolation, the Windows worker uses three phases: **publish a signed
 ephemeral recipient** (public Release token), **decrypt and compile** (without
-`GH_TOKEN` or `GITHUB_TOKEN` in that step), and **publish only encrypted
+`GH_TOKEN` or `GITHUB_TOKEN` in the child PowerShell/MSVC process), and **publish only encrypted
 results** (public Release token). The compile phase downloads ciphertext
 anonymously, checks its salted input commitment, and deletes its temporary
 plaintext workspace and one-time private key before the upload phase. This
 three-phase execution, including both signed proofs, was verified in real
-Windows run #38506746075. The **separate PRIVATE GitHub Actions coordinator
-job has not run** because of the private-runner billing restriction; the Pi
-performed that role for the successful synthetic integration test.
+Windows run #38506746075. The **separate PRIVATE GitHub Actions full relay
+job has not run** because the dedicated scoped runner credential and approved
+public-main workflow are not yet configured. A small ephemeral Pi Docker
+self-hosted runner has passed a separate smoke test; the Pi performed the
+coordination for the successful synthetic MSVC proof.
+
+The new incremental log transport temporarily supplies a PUBLIC-repo-only
+upload token to the trusted Python build transporter. The child PowerShell
+environment has the token removed, but a compromised process on the same
+Windows runner could still obtain it. Ciphertext-only log segments (up to
+128 KiB plaintext each) can reach the private coordinator before MSVC exits.
+The private side forwards their bytes provisionally and then verifies the
+whole log against the final GitHub-signed SHA-256. This streamed path passed
+local encrypted round-trip tests, **not yet a live hosted Windows streaming
+test**. The final signed log remains the fallback if chunk streaming fails.
 
 ### Automatic cleanup after coordinator interruptions
 

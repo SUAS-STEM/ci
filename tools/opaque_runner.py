@@ -196,7 +196,8 @@ def terminate_build_tree(process):
         process.kill()
 
 
-def capture_private_build(work, env, *, command=None, timeout=1200):
+def capture_private_build(work, env, *, command=None, timeout=1200,
+                          on_chunk=None):
     """Capture exact combined MSVC output privately, including timeouts.
 
     Drain the child pipe into a private file as it executes. Kill the child
@@ -239,6 +240,10 @@ def capture_private_build(work, env, *, command=None, timeout=1200):
                         break
                     output.write(chunk)
                     length += len(chunk)
+                    if on_chunk is not None:
+                        # The callback receives ONLY bounded raw bytes. Its
+                        # implementation must never write plaintext publicly.
+                        on_chunk(chunk)
                 output.flush()
             except (OSError, ValueError) as error:
                 reader_error.append(error)
