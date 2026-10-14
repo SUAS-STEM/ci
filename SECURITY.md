@@ -2,9 +2,9 @@
 
 ## What remains public
 
-The `SUAS-STEM/ci-relay-lab` source tree is public. Windows/Linux GitHub-hosted runners execute **only** the fixed synthetic source; the source allowlist and pinned toy program SHA-256 hashes in `tools/public_guard.py` enforce this. Workflow run metadata, job logs, build context, and the public encryption recipient are publicly visible. Public job logs contain ciphertext, not plaintext executable or synthetic diagnostic output.
+The `SUAS-STEM/ci-relay-lab` source tree is public. In the **original fixture workflow**, Windows/Linux runners compile only the fixed synthetic source; the source allowlist and pinned toy program SHA-256 hashes in `tools/public_guard.py` enforce this. The **separate experimental opaque MSVC workflow** decrypts the synthetic private staging project's CMake source inside its public Windows runner. Workflow run metadata, job logs, and public encryption recipients are visible. The tested public job logs contained no synthetic private compiler output or executable paths.
 
-No public build receives source from a private repository, a release-writing credential, the age private key, or GitHub credentials from the Pi. The workflow has `contents: read` only and checkout is `persist-credentials: false`.
+The original fixture does not receive private repository source or private credentials. Its workflow has `contents: read` only. The distinct opaque MSVC worker deliberately receives **encrypted source from a private staging repository**, and decrypts it during its tokenless build phase. Its bootstrap/publish phases have `contents: write` scoped to its own PUBLIC repository; the workflow never receives private source-repository or private-Release credentials from the Pi. Neither workflow uses `actions/upload-artifact`. This distinction is critical when assessing proprietary-source confidentiality.
 
 ## Ciphertext transport (no Actions artifacts)
 
@@ -57,7 +57,7 @@ It refuses changes to release ownership, asset digests and expected filenames,
 and skips an active public runner. It never accesses private source, artifacts,
 or credentials. This is a best-effort recovery measure, not a guarantee of
 immediate deletion after a catastrophic coordinator failure.
-The successful current synthetic proof is public Actions run #38493277635;
+The successful current synthetic proof is public Actions run #38506746075;
 its binary and diagnostic log are retained in the private Release.
 
 The revised three-step public workflow publishes its signed ephemeral public
@@ -67,8 +67,11 @@ or `GITHUB_TOKEN` supplied. It then deletes the plaintext build workspace and
 one-time private key before a final step uploads encrypted results using the
 PUBLIC token. This reduces direct token exposure but **does not provide an OS
 isolation boundary** against malicious source or scripts. The staged version
-has passed local tests but not yet a real Windows Actions build. It remains
-experimental and is not approved for confidential production source.
+has passed local tests **and** a real hosted Windows/MSVC build, public run
+#38506746075, which returned signed encrypted output to verified private
+Release `opaque-ci-38506746075`. It remains experimental and is not approved
+for confidential production source. The small private GitHub Actions caller
+is still billing-blocked and was not part of the hosted test.
 
 - The original public fixture uses a read-only `GITHUB_TOKEN`. The separate encrypted MSVC worker has **public-repository** `contents:write` permission to exchange short-lived encrypted prerelease assets; it does not receive any PRIVATE source or Release repository credential. This is a narrower trust boundary, not an isolated enclave. A dedicated repository-scoped GitHub App token should replace the Pi's broad personal token for unattended orchestration.
 - Source confidentiality cannot be achieved if proprietary GCS code is built on a public GitHub-hosted runner, even if GitHub Release publication is private. Use a trusted private execution environment for such builds.

@@ -72,11 +72,11 @@ that merely reuse the published nonce and private commit SHA. The salt is
 inside the encrypted ZIP, not an Actions workflow input. This protection is
 only as strong as the reviewed workflow and its runner execution.
 
-The real public `windows-2022` MSVC run
-[38493277635](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38493277635)
+The latest real public `windows-2022` MSVC run
+[38506746075](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38506746075)
 succeeded using **only synthetic** source and `.ps1` from the isolated private
 [staging repository](https://github.com/SUAS-STEM/ci-private-build-lab). The
-return output is in [PRIVATE Release `opaque-ci-38493277635`](https://github.com/SUAS-STEM/ci-private-build-lab/releases/tag/opaque-ci-38493277635).
+return output is in [PRIVATE Release `opaque-ci-38506746075`](https://github.com/SUAS-STEM/ci-private-build-lab/releases/tag/opaque-ci-38506746075).
 This newer proof also checked the **salted archive hash before unpacking**,
 authenticated both the input key and result hashes using GitHub-signed OIDC,
 and confirmed the private MSVC diagnostics were returned byte-for-byte.
@@ -85,15 +85,18 @@ paths (neither appeared); its Actions artifact inventory was zero. The Pi
 verified the private Release and saved an owner-only archive. The short-lived
 public prerelease and one-time branch test workflow were removed afterward.
 
-For stronger token isolation, the Windows worker now has three independent
+For stronger token isolation, the Windows worker has three independent
 steps: **publish the signed ephemeral recipient (public Release token),
 decrypt/compile without `GH_TOKEN` or `GITHUB_TOKEN`, and publish only
 encrypted results (public Release token)**. It downloads public ciphertext
 anonymously, verifies the salted input commitment, and deletes the plaintext
 workspace and per-run decryption key before the final upload step. Local
 three-step encryption tests and an anonymous GitHub Release download passed.
-This revised three-step version still requires a real Windows integration
-run; the prior successful Windows run used the older single-step worker.
+The three-step version passed the full Windows integration in
+[run #38506746075](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38506746075),
+including authenticating both signed one-time receipts, ciphertext transfer,
+MSVC compilation, private Release readback, zero Actions artifacts, public
+log privacy checks, and cleanup of the public temporary Release.
 
 For additional defense in depth, the Windows worker is now split into three
 phases: **publish authenticated recipient (public Release token), decrypt and
@@ -103,8 +106,10 @@ encrypted source anonymously from the public prerelease, checks the salted
 source commitment, and deletes its plaintext workspace and one-time private
 key **before** entering the result-upload phase. An isolated real-age
 three-phase round trip and anonymous public-release download have passed.
-The three-step version still requires its own hosted Windows integration test;
-the earlier successful run used the prior single-step worker.
+The three-step workflow was verified on an actual GitHub-hosted Windows 2022
+runner in run #38506746075. The **separate private Actions job** remains
+unverified because private hosted-runner billing is blocked; the Pi performed
+the private coordination in this test.
 
 ### Automatic cleanup after coordinator interruptions
 
