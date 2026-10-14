@@ -22,6 +22,12 @@ from . import opaque_runner as relay
 
 MAX_SOURCE_CIPHER = 25 * 1024 * 1024
 PUBLIC_URL = "https://github.com/SUAS-STEM/ci-relay-lab/releases/download/"
+FORBIDDEN_COMPILE_VARIABLES = (
+    "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+    "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN",
+    "ACTIONS_RUNTIME_URL", "GITHUB_ENV", "GITHUB_OUTPUT",
+    "GITHUB_PATH", "GITHUB_STEP_SUMMARY", "GITHUB_STATE",
+)
 
 
 def context():
@@ -97,13 +103,7 @@ def compile_private():
     nonce, sha, recipient, commitment, root = context()
     # Public GitHub token is supplied ONLY to bootstrap/publish workflow steps.
     # Strip GitHub runtime/ID tokens before running PowerShell too.
-    forbidden_credentials = (
-        "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-        "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN",
-        "ACTIONS_RUNTIME_URL", "GITHUB_ENV", "GITHUB_OUTPUT",
-        "GITHUB_PATH", "GITHUB_STEP_SUMMARY", "GITHUB_STATE",
-    )
-    if any(os.environ.get(name) for name in forbidden_credentials):
+    if any(os.environ.get(name) for name in FORBIDDEN_COMPILE_VARIABLES):
         raise RuntimeError("Refusing GitHub credential or control path in plaintext compilation phase")
     work = original(nonce, root)
     keyfile = work / "recipient-key.txt"

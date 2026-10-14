@@ -33,7 +33,7 @@ class StagedMSVCFailureTests(unittest.TestCase):
 
     def environment(self, root, recipient, bundle):
         env = {k: v for k, v in os.environ.items()
-               if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
+               if k not in worker.FORBIDDEN_COMPILE_VARIABLES}
         env.update({"CI_NONCE": NONCE, "CI_PRIVATE_SHA": SHA,
                     "CI_OUTPUT_RECIPIENT": recipient,
                     "CI_BUNDLE_SHA256": hashlib.sha256(bundle).hexdigest(),

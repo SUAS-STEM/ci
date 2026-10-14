@@ -53,7 +53,9 @@ class StagedMSVCWorkflowTests(unittest.TestCase):
                 result.stderr).group()
 
             env = dict(os.environ)
-            for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+            # Simulate the actual trusted launcher, which removes Actions
+            # control paths as well as tokens before starting Python.
+            for name in worker.FORBIDDEN_COMPILE_VARIABLES:
                 env.pop(name, None)
             env.update({
                 "CI_NONCE": NONCE,
@@ -173,8 +175,7 @@ class StagedMSVCWorkflowTests(unittest.TestCase):
         compile_step = compile_step.split("- name: Publish only ciphertext", 1)[0]
         self.assertNotIn("GH_TOKEN:", compile_step)
         self.assertNotIn("github.token", compile_step)
-        for name in ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_RUNTIME_TOKEN",
-                     "GITHUB_OUTPUT", "GITHUB_ENV", "GITHUB_STEP_SUMMARY"):
+        for name in worker.FORBIDDEN_COMPILE_VARIABLES:
             self.assertIn(name, compile_step)
         self.assertIn("python -m tools.opaque_staged_runner compile", compile_step)
 
