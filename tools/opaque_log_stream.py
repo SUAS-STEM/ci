@@ -71,21 +71,33 @@ class EncryptedLogUploader:
 
     def _upload(self):
         buffer = bytearray()
+        first_byte_at = None
         try:
             while True:
+                # Flush by elapsed time since the first buffered byte, NOT
+                # by time since the last compiler message. Otherwise frequent
+                # small MSVC messages can postpone a partial log indefinitely.
+                timeout = (max(0, first_byte_at + self.flush_seconds -
+                               time.monotonic()) if first_byte_at is not None
+                           else self.flush_seconds)
                 try:
-                    item = self.pending.get(timeout=self.flush_seconds)
+                    item = self.pending.get(timeout=timeout)
                 except queue.Empty:
                     item = b""
                 if item is None:
                     break
+                if item and not buffer:
+                    first_byte_at = time.monotonic()
                 buffer.extend(item)
                 while len(buffer) >= CHUNK_BYTES:
                     self._send(bytes(buffer[:CHUNK_BYTES]))
                     del buffer[:CHUNK_BYTES]
-                if not item and buffer:
+                    first_byte_at = (time.monotonic() if buffer else None)
+                if buffer and (not item or time.monotonic() >=
+                               first_byte_at + self.flush_seconds):
                     self._send(bytes(buffer))
                     buffer.clear()
+                    first_byte_at = None
             if buffer:
                 self._send(bytes(buffer))
         except Exception as error:

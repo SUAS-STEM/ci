@@ -73,6 +73,45 @@ class EncryptedStreamTests(unittest.TestCase):
             self.assertTrue(sender.thread.is_alive(), "Uploader must remain live")
             self.assertTrue(sender.finish())
 
+    def test_continuous_small_output_still_flushes_before_build_finishes(self):
+        """A producer that never goes silent must not postpone live preview."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            key = root / "key"
+            created = subprocess.run([str(relay.KEYGEN), "-o", str(key)],
+                                     capture_output=True, check=True, text=True)
+            recipient = re.search(r"age1[023456789acdefghjklmnpqrstuvwxyz]{58}",
+                                  created.stderr).group()
+            sent = []
+
+            def gh(*args):
+                sent.append((time.monotonic(), Path(args[-1]).read_bytes()))
+
+            sender = EncryptedLogUploader(relay.AGE, recipient, gh,
+                                          "ci-opaque-" + "d" * 24, root,
+                                          flush_seconds=0.09)
+            started = time.monotonic()
+            raw = b""
+            for _ in range(25):
+                entry = b"MSVC still compiling\r\n"
+                raw += entry
+                sender.feed(entry)
+                time.sleep(0.017)
+            self.assertTrue(sent, "Continuous output starved the time-based flush")
+            self.assertTrue(any(at < time.monotonic() for at, _ in sent))
+            self.assertLess(sent[0][0] - started, 0.39,
+                            "First encrypted chunk did not arrive in time")
+            self.assertTrue(sender.thread.is_alive())
+            self.assertTrue(sender.finish())
+            recovered = bytearray()
+            for _, ciphertext in sent:
+                plaintext = subprocess.run(
+                    [str(relay.AGE), "-d", "-i", str(key)],
+                    input=ciphertext, capture_output=True, check=True,
+                ).stdout
+                recovered.extend(plaintext)
+            self.assertEqual(bytes(recovered), raw)
+
     def test_network_upload_failure_falls_back_to_final_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
