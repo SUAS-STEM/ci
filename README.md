@@ -57,6 +57,9 @@ return-log digest, executable digest, and Windows process exit code. Public
 Release asset substitution cannot fabricate a correctly signed result without
 control of the approved GitHub workflow execution. Compiler output is spooled
 to a private temporary file with a size cap, including diagnostics on timeouts;
+the worker now attempts to terminate the **entire CMake/MSVC child process
+tree** on timeout or oversized output rather than only killing PowerShell.
+The process-tree termination is best-effort, not a security isolation boundary;
 encrypted input downloads are checked against the GitHub asset digest before
 being accepted. These protections passed the later live build described below.
 The private coordinator validates and decrypts the results, publishes the actual binary, private

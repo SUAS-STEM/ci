@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -171,6 +172,30 @@ def unpack_into(files, work):
         dest.write_bytes(content)
 
 
+def terminate_build_tree(process):
+    """Stop compiler descendants, not just the PowerShell parent process.
+
+    Windows MSVC/CMake may start compiler subprocesses that survive killing
+    PowerShell alone. POSIX test processes run in their own process session.
+    Failure to stop the build is a hard error; never report a successful CI.
+    """
+    if os.name == "nt":
+        result = subprocess.run(
+            ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=10, check=False,
+        )
+        if result.returncode != 0 and process.poll() is None:
+            process.kill()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        process.kill()
+
+
 def capture_private_build(work, env, *, command=None, timeout=1200):
     """Capture exact combined MSVC output privately, including timeouts.
 
@@ -185,9 +210,12 @@ def capture_private_build(work, env, *, command=None, timeout=1200):
                           "-NonInteractive", "-File", str(work / "build.ps1")]
     descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as output:
-        process = subprocess.Popen(command, cwd=work, env=env,
-                                   stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, bufsize=0)
+        flags = (subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
+        process = subprocess.Popen(
+            command, cwd=work, env=env, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, bufsize=0,
+            creationflags=flags, start_new_session=(os.name != "nt"),
+        )
         oversized = threading.Event()
         reader_error = []
 
@@ -204,9 +232,10 @@ def capture_private_build(work, env, *, command=None, timeout=1200):
                         output.write(chunk[:max(0, MAX_LOG - length)])
                         oversized.set()
                         try:
-                            process.kill()
-                        except ProcessLookupError:
-                            pass
+                            terminate_build_tree(process)
+                        except (OSError, subprocess.TimeoutExpired):
+                            reader_error.append(RuntimeError(
+                                "Unable to terminate oversized compiler process tree"))
                         break
                     output.write(chunk)
                     length += len(chunk)
@@ -214,8 +243,8 @@ def capture_private_build(work, env, *, command=None, timeout=1200):
             except (OSError, ValueError) as error:
                 reader_error.append(error)
                 try:
-                    process.kill()
-                except OSError:
+                    terminate_build_tree(process)
+                except (OSError, subprocess.TimeoutExpired):
                     pass
 
         reader = threading.Thread(target=drain, name="private-msvc-log-drain",
@@ -226,12 +255,20 @@ def capture_private_build(work, env, *, command=None, timeout=1200):
             returncode = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            process.kill()
+            terminate_build_tree(process)
             process.wait(timeout=10)
             returncode = 124
         finally:
             reader.join(timeout=10)
             if reader.is_alive():
+                # PowerShell can exit while a spawned compiler still holds
+                # stdout open. Treat it as a failed build and attempt to stop
+                # the remaining process group before abandoning the capture.
+                try:
+                    terminate_build_tree(process)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                reader.join(timeout=2)
                 process.stdout.close()
                 raise RuntimeError("Private compiler log drain did not terminate")
             process.stdout.close()

@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import os
+import time
 import sys
 import tempfile
 import unittest
@@ -201,6 +202,27 @@ class OpaquePacketTests(unittest.TestCase):
                                                 command=command, timeout=0.4)
             self.assertEqual(status, 124)
             self.assertEqual(log, b"partial\r\n")
+
+    def test_timeout_kills_nested_compiler_descendants(self):
+        # Simulate PowerShell spawning a CMake/MSVC child that would write to
+        # disk after the outer process was killed. This must never survive a
+        # timed-out private build on Linux and Windows alike.
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "orphaned-child-wrote-file"
+            child = ("import time,pathlib;time.sleep(1.8);"
+                     f"pathlib.Path({str(marker)!r}).write_text('leaked')")
+            parent = ("import subprocess,sys,time;"
+                      f"subprocess.Popen([sys.executable,'-c',{child!r}]);"
+                      "print('compile started',flush=True);time.sleep(10)")
+            status, log = capture_private_build(
+                Path(temp), os.environ.copy(),
+                command=[sys.executable, "-c", parent], timeout=0.8,
+            )
+            self.assertEqual(status, 124)
+            self.assertIn(b"compile started", log)
+            time.sleep(2.0)
+            self.assertFalse(marker.exists(),
+                             "MSVC/CMake child process survived build cancellation")
 
     def test_refuse_unbounded_output_and_unsafe_path(self):
         with tempfile.TemporaryDirectory() as temp:
