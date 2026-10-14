@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
@@ -173,9 +174,9 @@ def unpack_into(files, work):
 def capture_private_build(work, env, *, command=None, timeout=1200):
     """Capture exact combined MSVC output privately, including timeouts.
 
-    Spool to a private file instead of an unlimited subprocess.PIPE, which
-    risks OOM when a compiler unexpectedly prints large diagnostic output.
-    The caller encrypts these unchanged bytes before any public upload.
+    Drain the child pipe into a private file as it executes. Kill the child
+    once its combined output exceeds MAX_LOG, rather than waiting for a
+    potentially disk-filling build to exit. Never echo the output publicly.
     """
     log = work / "msvc-private-output.bin"
     if log.exists() or log.is_symlink():
@@ -184,18 +185,62 @@ def capture_private_build(work, env, *, command=None, timeout=1200):
                           "-NonInteractive", "-File", str(work / "build.ps1")]
     descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as output:
+        process = subprocess.Popen(command, cwd=work, env=env,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, bufsize=0)
+        oversized = threading.Event()
+        reader_error = []
+
+        def drain():
+            length = 0
+            try:
+                while True:
+                    chunk = process.stdout.read(65536)
+                    if not chunk:
+                        break
+                    if length + len(chunk) > MAX_LOG:
+                        # Keep the original bounded prefix verbatim. Never
+                        # publish a truncated log as a successful build.
+                        output.write(chunk[:max(0, MAX_LOG - length)])
+                        oversized.set()
+                        try:
+                            process.kill()
+                        except ProcessLookupError:
+                            pass
+                        break
+                    output.write(chunk)
+                    length += len(chunk)
+                output.flush()
+            except (OSError, ValueError) as error:
+                reader_error.append(error)
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+
+        reader = threading.Thread(target=drain, name="private-msvc-log-drain",
+                                  daemon=True)
+        reader.start()
+        timed_out = False
         try:
-            result = subprocess.run(command, cwd=work, env=env,
-                                    stdout=output, stderr=subprocess.STDOUT,
-                                    timeout=timeout, check=False)
-            returncode = result.returncode
+            returncode = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            # subprocess.run kills/reaps its child when the timeout expires.
-            # Retain any captured compiler diagnostics with a failing status.
+            timed_out = True
+            process.kill()
+            process.wait(timeout=10)
             returncode = 124
-    size = log.stat().st_size
-    if size > MAX_LOG:
-        raise RuntimeError("Encrypted build log exceeds size limit")
+        finally:
+            reader.join(timeout=10)
+            if reader.is_alive():
+                process.stdout.close()
+                raise RuntimeError("Private compiler log drain did not terminate")
+            process.stdout.close()
+        if reader_error:
+            raise RuntimeError("Private compiler log capture failed") from reader_error[0]
+        if oversized.is_set():
+            raise RuntimeError("Encrypted build log exceeds size limit")
+        if timed_out:
+            returncode = 124
     return returncode, log.read_bytes()
 
 

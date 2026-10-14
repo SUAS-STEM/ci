@@ -209,9 +209,22 @@ class OpaquePacketTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "exceeds size"):
                     capture_private_build(Path(temp), os.environ.copy(),
                                           command=command, timeout=5)
+            # Even a runaway child cannot fill the disk while we wait for it.
+            self.assertLessEqual((Path(temp) / "msvc-private-output.bin").stat().st_size,
+                                 100)
             with self.assertRaisesRegex(RuntimeError, "not clean"):
                 capture_private_build(Path(temp), os.environ.copy(),
                                       command=command, timeout=5)
+
+    def test_failed_build_preserves_unmodified_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temp:
+            command = [sys.executable, "-c",
+                       "import sys;sys.stdout.buffer.write(b'compiler failed\\r\\n');"
+                       "sys.stdout.flush();sys.exit(23)"]
+            returncode, log = capture_private_build(Path(temp), os.environ.copy(),
+                                                   command=command, timeout=5)
+            self.assertEqual(returncode, 23)
+            self.assertEqual(log, b"compiler failed\r\n")
 
     def test_ciphertext_source_requires_expected_prerelease_digest(self):
         import hashlib
