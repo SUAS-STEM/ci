@@ -83,10 +83,10 @@ inside the encrypted ZIP, not an Actions workflow input. This protection is
 only as strong as the reviewed workflow and its runner execution.
 
 The latest real public `windows-2022` MSVC run
-[38506746075](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38506746075)
+[38600642017](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38600642017)
 succeeded using **only synthetic** source and `.ps1` from the isolated private
 [staging repository](https://github.com/SUAS-STEM/ci-private-build-lab). The
-return output is in [PRIVATE Release `opaque-ci-38506746075`](https://github.com/SUAS-STEM/ci-private-build-lab/releases/tag/opaque-ci-38506746075).
+return output is in [PRIVATE Release `opaque-ci-38600642017`](https://github.com/SUAS-STEM/ci-private-build-lab/releases/tag/opaque-ci-38600642017).
 This newer proof also checked the **salted archive hash before unpacking**,
 authenticated both the input key and result hashes using GitHub-signed OIDC,
 and confirmed the private MSVC diagnostics were returned byte-for-byte.
@@ -94,6 +94,9 @@ The public job logs were checked for private synthetic markers and executable
 paths (neither appeared); its Actions artifact inventory was zero. The Pi
 verified the private Release and saved an owner-only archive. The short-lived
 public prerelease and one-time branch test workflow were removed afterward.
+This run also successfully exercised encrypted incremental compiler-log
+delivery on a real hosted Windows runner (1,346 decrypted log bytes) with a
+separate final GitHub-signed whole-log integrity check.
 
 For token isolation, the Windows worker uses three phases: **publish a signed
 ephemeral recipient** (public Release token), **decrypt and compile** (without
@@ -115,8 +118,8 @@ Windows runner could still obtain it. Ciphertext-only log segments (up to
 128 KiB plaintext each) can reach the private coordinator before MSVC exits.
 The private side forwards their bytes provisionally and then verifies the
 whole log against the final GitHub-signed SHA-256. This streamed path passed
-local encrypted round-trip tests, **not yet a live hosted Windows streaming
-test**. The final signed log remains the fallback if chunk streaming fails.
+local encrypted round-trip tests **and live hosted Windows/MSVC run #38600642017**.
+The final signed log remains the fallback if chunk streaming fails.
 
 ### Automatic cleanup after coordinator interruptions
 
