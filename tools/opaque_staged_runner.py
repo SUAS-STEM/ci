@@ -97,8 +97,14 @@ def compile_private():
     nonce, sha, recipient, commitment, root = context()
     # Public GitHub token is supplied ONLY to bootstrap/publish workflow steps.
     # Strip GitHub runtime/ID tokens before running PowerShell too.
-    if os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"):
-        raise RuntimeError("Refusing GitHub credential in plaintext compilation phase")
+    forbidden_credentials = (
+        "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN",
+        "ACTIONS_RUNTIME_URL", "GITHUB_ENV", "GITHUB_OUTPUT",
+        "GITHUB_PATH", "GITHUB_STEP_SUMMARY", "GITHUB_STATE",
+    )
+    if any(os.environ.get(name) for name in forbidden_credentials):
+        raise RuntimeError("Refusing GitHub credential or control path in plaintext compilation phase")
     work = original(nonce, root)
     keyfile = work / "recipient-key.txt"
     pubfile = work / "recipient.agepub"

@@ -60,7 +60,21 @@ jobs:
         run: python -m tools.opaque_staged_runner bootstrap
       - name: Compile without repository credentials; retain encrypted diagnostics
         shell: pwsh
-        run: python -m tools.opaque_staged_runner compile
+        run: |
+          # OIDC is job-scoped; scrub its request token and Actions control
+          # paths in this trusted launcher BEFORE starting Python. The build
+          # itself does not need any of these runner capabilities.
+          $remove = @(
+            'GH_TOKEN', 'GITHUB_TOKEN',
+            'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL',
+            'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL',
+            'GITHUB_ENV', 'GITHUB_OUTPUT', 'GITHUB_PATH',
+            'GITHUB_STEP_SUMMARY', 'GITHUB_STATE'
+          )
+          foreach ($name in $remove) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+          }
+          python -m tools.opaque_staged_runner compile
       - name: Publish only ciphertext and GitHub-signed build status
         shell: pwsh
         if: ${{ success() }}

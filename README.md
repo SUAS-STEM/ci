@@ -104,7 +104,10 @@ ephemeral recipient** (public Release token), **decrypt and compile** (without
 child PowerShell/MSVC process), and **publish only encrypted results** (public
 Release token). The compile phase downloads ciphertext
 anonymously, checks its salted input commitment, and deletes its temporary
-plaintext workspace and one-time private key before the upload phase. This
+plaintext workspace and one-time private key before the upload phase. The
+launcher also removes job-scoped OIDC request credentials and GitHub Actions
+control-file paths before starting Python. This is not isolation from the
+GitHub-hosted runner infrastructure. This
 three-phase execution, including both signed proofs, was verified in real
 Windows run #38506746075. The **separate PRIVATE GitHub Actions full relay
 job has not run** because the dedicated scoped runner credential and approved

@@ -64,7 +64,12 @@ The revised three-step public workflow publishes its signed ephemeral public
 recipient with a scoped PUBLIC Release token; a separate build step downloads
 the public ciphertext anonymously and executes the PowerShell/MSVC subprocess
 without `GH_TOKEN` or `GITHUB_TOKEN` in **either its own transport Python
-process or the PowerShell child process**. This replaces an earlier optional
+process or the PowerShell child process**. The trusted PowerShell launcher
+also unsets job-scoped OIDC request credentials, runtime tokens and GitHub
+workflow-control paths before it starts Python; the Python entry point refuses
+to compile if these values remain. This is best-effort process hygiene and
+**does not** remove credentials from privileged hosted-runner infrastructure
+or constitute a sandbox. This replaces an earlier optional
 incremental ciphertext streaming implementation that held a PUBLIC-only
 release token in its transport parent while compiling. The compiler subprocess
 filters GitHub Actions control-file paths, OIDC/runner variables, known token

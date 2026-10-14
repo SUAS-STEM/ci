@@ -153,6 +153,18 @@ class StagedMSVCWorkflowTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 with self.assertRaisesRegex(RuntimeError, "Refusing GitHub credential"):
                     worker.compile_private()
+            env.pop("GH_TOKEN")
+            for secret_variable in (
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL",
+                "ACTIONS_RUNTIME_TOKEN", "ACTIONS_RUNTIME_URL", "GITHUB_ENV",
+                "GITHUB_OUTPUT", "GITHUB_PATH", "GITHUB_STEP_SUMMARY",
+            ):
+                env[secret_variable] = "MUST_BE_SCRUBBED"
+                with self.subTest(variable=secret_variable):
+                    with patch.dict(os.environ, env, clear=True):
+                        with self.assertRaisesRegex(RuntimeError, "Refusing GitHub credential"):
+                            worker.compile_private()
+                del env[secret_variable]
 
     def test_actual_workflow_compile_step_has_no_github_token(self):
         workflow = (Path(__file__).resolve().parents[1] /
@@ -161,7 +173,10 @@ class StagedMSVCWorkflowTests(unittest.TestCase):
         compile_step = compile_step.split("- name: Publish only ciphertext", 1)[0]
         self.assertNotIn("GH_TOKEN:", compile_step)
         self.assertNotIn("github.token", compile_step)
-        self.assertIn("run: python -m tools.opaque_staged_runner compile", compile_step)
+        for name in ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_RUNTIME_TOKEN",
+                     "GITHUB_OUTPUT", "GITHUB_ENV", "GITHUB_STEP_SUMMARY"):
+            self.assertIn(name, compile_step)
+        self.assertIn("python -m tools.opaque_staged_runner compile", compile_step)
 
 
 if __name__ == "__main__":
