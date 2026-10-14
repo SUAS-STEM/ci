@@ -16,12 +16,43 @@ from tools.opaque_runner import (read_packet, RECIPIENT, MARKER,
                                  oidc_result_audience,
                                  github_runner_oidc, trusted_source_asset,
                                  receive_encrypted_source, safe_bundle_name,
-                                 verify_bundle_commitment)
+                                 verify_bundle_commitment,
+                                 isolated_build_environment)
 
 
 class OpaquePacketTests(unittest.TestCase):
     NONCE = "a" * 24
     SHA = "b" * 40
+
+    def test_compiler_subprocess_does_not_inherit_workflow_credentials(self):
+        sentinel = {
+            "Path": "C:/Windows/System32;C:/VisualStudio/bin",
+            "SystemRoot": "C:/Windows",
+            "TEMP": "C:/Temp",
+            "NUMBER_OF_PROCESSORS": "8",
+            "GH_TOKEN": "must-not-pass",
+            "gItHuB_tOkEn": "must-not-pass",
+            "GITHUB_ENV": "C:/Temp/Actions/_env",
+            "GITHUB_OUTPUT": "C:/Temp/Actions/_out",
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "must-not-pass",
+            "ACTIONS_ID_TOKEN_REQUEST_URL": "must-not-pass",
+            "ACTIONS_RUNTIME_TOKEN": "must-not-pass",
+            "RUNNER_TEMP": "C:/Actions/_temp",
+            "CI_PRIVATE_SHA": "must-not-pass",
+            "NUGET_AUTH_TOKEN": "must-not-pass",
+            "VSS_NUGET_EXTERNAL_FEED_ENDPOINTS": "must-not-pass",
+            "MY_SECRET_KEY": "must-not-pass",
+            "SYSTEM_ACCESSTOKEN": "must-not-pass",
+            "AZURE_CREDENTIAL_FILE": "must-not-pass",
+        }
+        env = isolated_build_environment(sentinel)
+        self.assertEqual(env["CI"], "true")
+        self.assertEqual(env["Path"], sentinel["Path"])
+        self.assertEqual(env["SystemRoot"], sentinel["SystemRoot"])
+        self.assertEqual(env["TEMP"], sentinel["TEMP"])
+        self.assertEqual(env["NUMBER_OF_PROCESSORS"], "8")
+        self.assertFalse(any(value == "must-not-pass" for value in env.values()))
+        self.assertEqual(sentinel["GH_TOKEN"], "must-not-pass")
 
     def packet(self, filename="src/sample.cpp", content=b"int main(){}", nonce=None):
         output = io.BytesIO()

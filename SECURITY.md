@@ -67,7 +67,11 @@ without `GH_TOKEN` or `GITHUB_TOKEN` in its environment. For incremental
 encrypted diagnostics, the trusted Python parent process temporarily holds
 a PUBLIC-repository-only release-upload token during compilation. A process
 with the same Windows user may still steal that token; environment scrubbing
-is NOT a strong OS isolation boundary. It then deletes the plaintext build workspace and
+is NOT a strong OS isolation boundary. The compiler subprocess now also
+filters GitHub Actions control-file paths, OIDC/runner variables, known token
+and credential variable names, and relay metadata while retaining ordinary
+Windows/MSVC execution settings. Local tests enforce that filtering, but a
+same-user or privileged process can still inspect its parent. It then deletes the plaintext build workspace and
 one-time private key before a final step uploads encrypted results using the
 PUBLIC token. This reduces direct token exposure but **does not provide an OS
 isolation boundary** against malicious source or scripts. The staged version

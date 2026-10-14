@@ -339,6 +339,27 @@ def receive_encrypted_source(tag, work, *, retries=150):
     raise TimeoutError("Encrypted build input was not received")
 
 
+def isolated_build_environment(source=None):
+    """Best-effort credential minimization for untrusted encrypted scripts.
+
+    Preserve Windows/MSVC PATH, SystemRoot, TEMP and ordinary build settings,
+    but never pass GitHub Actions control files, OIDC credentials, or known
+    secret-bearing environment variables to the PowerShell compiler process.
+    This does NOT isolate the script from other processes on the hosted runner.
+    """
+    env = dict(os.environ if source is None else source)
+    forbidden_prefixes = ("GITHUB_", "ACTIONS_", "RUNNER_", "GH_", "CI_", "VSS_")
+    forbidden_parts = ("TOKEN", "PASSWORD", "SECRET", "CREDENTIAL", "API_KEY",
+                       "PRIVATE_KEY", "AUTHORIZATION")
+    for key in list(env):
+        normalized = key.upper()
+        if (normalized.startswith(forbidden_prefixes)
+                or any(term in normalized for term in forbidden_parts)):
+            env.pop(key)
+    env["CI"] = "true"
+    return env
+
+
 def verify_bundle_commitment(data, expected_sha256):
     """Require the exact privately committed plaintext ZIP, not just its nonce.
 
@@ -365,11 +386,7 @@ def _install_and_build(nonce, source_commit, recipient, keyfile, work):
     files = read_packet(decrypted, nonce, source_commit)
     incoming.unlink()
     unpack_into(files, work)
-    env = dict(os.environ)
-    for key in ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_RUNTIME_TOKEN",
-                "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_RUNTIME_URL"):
-        env.pop(key, None)
-    env["CI"] = "true"
+    env = isolated_build_environment()
     # Preserve exactly what the PowerShell process emitted, including errors.
     # Errors and timeouts still return an encrypted log and status file.
     returncode, log = capture_private_build(work, env)
