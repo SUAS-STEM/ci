@@ -19,7 +19,6 @@ ALLOWED_FILES = frozenset({
     ".github/workflows/security-review.yml",
     ".github/workflows/secure-opaque-build.yml",
     ".github/workflows/temporary-opaque-salted-test.yml",
-    ".github/workflows/temporary-opaque-salted-test.yml",
     ".github/workflows/opaque-prerelease-cleanup.yml",
     ".gitignore",
     "CMakeLists.txt",
