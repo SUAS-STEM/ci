@@ -82,8 +82,6 @@ is still billing-blocked and was not part of the hosted test.
 - The Pi archive currently has Unix file permissions, not disk-level encryption or an independent offsite backup. A stolen SSD or compromised privileged account can expose its plaintext private-release assets.
 - The public fixture contains a deliberately generated, random synthetic canary to test accidental plaintext logging; it does not use proprietary secrets.
 
-## Source and release review
-
 ## Public reusable workflow definitions invoked by private callers
 
 `.github/workflows/private-reusable-build.yml` is intentionally **public
@@ -102,6 +100,8 @@ runner access controls. No cryptographic source secrecy from GitHub-hosted
 runner administrators or privileged self-hosted users is claimed. The private
 caller also pays for the runner execution, regardless of the reusable
 definition being publicly hosted.
+
+## Source and release review
 
 The approved public CI workflow is manual, `main`-only, and restricted to the approved actor. The repository's protected `main` requires an independent reviewer and the `public-source-gate` check. The one-off temporary integration workflow used during the live proof has been removed; do not re-enable it.
 

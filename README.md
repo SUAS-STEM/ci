@@ -1,12 +1,19 @@
-# Encrypted public CI relay (synthetic only)
+# Encrypted public CI relay — synthetic integration project
 
-This is the **PUBLIC test repository** for the encrypted Windows/Linux CI transport. Only a pinned, harmless C++ sample is compiled here. A trusted Raspberry Pi holds each one-time decryption key, retrieves encrypted job logs, verifies build identity and contents, and uploads the compiled outputs directly to a **PRIVATE GitHub Release** at [SUAS-STEM/ci-release-vault](https://github.com/SUAS-STEM/ci-release-vault).
+This is the **PUBLIC test and transport repository** for two different CI protocols. **Only harmless synthetic source has been used in the live tests.** Neither protocol has been connected to GCS.
 
-**No GitHub Actions artifacts are created or downloaded.** GitHub public workflow logs contain *only age ciphertext* for the test output. The Pi uploads the verified Linux and Windows executables, with checksum sidecars, straight to the private Release. It then synchronizes that private release to its own permanent storage.
+| Protocol | Where compilation runs | Where private outputs end up | Purpose |
+|---|---|---|---|
+| **Original synthetic fixture** (`fixture.yml`) | Public Windows/Linux runners compile the *public fixed toy* | [Private `ci-release-vault`](https://github.com/SUAS-STEM/ci-release-vault), then Pi | Test ciphertext-in-job-log transport |
+| **Encrypted related-project MSVC relay** (`secure-opaque-build.yml`) | Public Windows runner decrypts and builds a synthetic project sent by a *private coordinator* | [Private `ci-private-build-lab`](https://github.com/SUAS-STEM/ci-private-build-lab) Release, then Pi | Test the requested private-orchestration/public-compilation architecture |
+
+The optional `private-reusable-build.yml` is a **different alternative**: it runs compilation on the *private caller's runner*, not the public relay runner. It is documented separately below.
+
+**Neither tested protocol uses GitHub Actions artifacts.** The original fixture embeds age-encrypted records in public job logs. The MSVC relay instead exchanges ephemeral public keys and encrypted source/results in a short-lived PUBLIC prerelease; its compiler output is displayed only by the private coordinator and retained in the private Release. These mechanisms are not interchangeable.
 
 The earlier artifact ZIP upload/download, GitHub artifact deletion, and long-term artifact-store code have been removed. The historical Pi archives under `~/ci-artifacts/ci-relay-lab/` are unchanged, but no new runs use that path.
 
-## Operating flow
+## Original synthetic fixture operating flow (not the MSVC relay)
 
 1. Run `python3 tools/install_age.py` on the Pi to install the pinned, checksum-verified `age` binary.
 2. From this repository's **approved `main` branch**, run `python3 -m tools.pi_public_release --left 17 --right -3`.
@@ -88,31 +95,16 @@ paths (neither appeared); its Actions artifact inventory was zero. The Pi
 verified the private Release and saved an owner-only archive. The short-lived
 public prerelease and one-time branch test workflow were removed afterward.
 
-For stronger token isolation, the Windows worker has three independent
-steps: **publish the signed ephemeral recipient (public Release token),
-decrypt/compile without `GH_TOKEN` or `GITHUB_TOKEN`, and publish only
-encrypted results (public Release token)**. It downloads public ciphertext
-anonymously, verifies the salted input commitment, and deletes the plaintext
-workspace and per-run decryption key before the final upload step. Local
-three-step encryption tests and an anonymous GitHub Release download passed.
-The three-step version passed the full Windows integration in
-[run #38506746075](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38506746075),
-including authenticating both signed one-time receipts, ciphertext transfer,
-MSVC compilation, private Release readback, zero Actions artifacts, public
-log privacy checks, and cleanup of the public temporary Release.
-
-For additional defense in depth, the Windows worker is now split into three
-phases: **publish authenticated recipient (public Release token), decrypt and
-compile (NO `GH_TOKEN`/`GITHUB_TOKEN` environment variable), and publish
-encrypted results (public Release token)**. The compile phase downloads the
-encrypted source anonymously from the public prerelease, checks the salted
-source commitment, and deletes its plaintext workspace and one-time private
-key **before** entering the result-upload phase. An isolated real-age
-three-phase round trip and anonymous public-release download have passed.
-The three-step workflow was verified on an actual GitHub-hosted Windows 2022
-runner in run #38506746075. The **separate private Actions job** remains
-unverified because private hosted-runner billing is blocked; the Pi performed
-the private coordination in this test.
+For token isolation, the Windows worker uses three phases: **publish a signed
+ephemeral recipient** (public Release token), **decrypt and compile** (without
+`GH_TOKEN` or `GITHUB_TOKEN` in that step), and **publish only encrypted
+results** (public Release token). The compile phase downloads ciphertext
+anonymously, checks its salted input commitment, and deletes its temporary
+plaintext workspace and one-time private key before the upload phase. This
+three-phase execution, including both signed proofs, was verified in real
+Windows run #38506746075. The **separate PRIVATE GitHub Actions coordinator
+job has not run** because of the private-runner billing restriction; the Pi
+performed that role for the successful synthetic integration test.
 
 ### Automatic cleanup after coordinator interruptions
 
@@ -197,15 +189,15 @@ enclave: hosted/private or self-hosted runners can see source plaintext while
 compiling. Strict source confidentiality requires a runner you trust, protected
 private workflows, narrow credentials, and appropriate network controls.
 
-- **This is not a mechanism to compile proprietary GCS source in public Actions.** Encrypting output or encrypting a source archive cannot keep the source secret from a runner that executes it. Public runners see this repository's harmless pinned C++ toy source only. Private GCS needs a trusted private build environment.
-- The one-time age *private* key stays on the Pi in anonymous memory. If the Pi crashes before fetching/decrypting, the job must be rerun with a fresh key; it is not recoverable from GitHub.
-- A public ciphertext record can be seen by anybody with access to the public workflow logs. The one-time secret key remains private to the Pi. Once plaintext executables are published in a **private** Release, any authorized member of that private repo can download them.
+- **This is not a proven confidential way to compile proprietary GCS source on public Actions.** Both workflows have used synthetic code only. In the original fixture the toy source is public; in the separate opaque relay the public runner sees *decrypted private-staging synthetic source* while it compiles. A runner executing actual proprietary source can access its plaintext. GCS remains untouched.
+- For the **original fixture**, the one-time age private key stays on the Pi in anonymous memory. If the Pi crashes before fetching/decrypting, the job must be rerun with a fresh key; it is not recoverable from GitHub. The separate opaque MSVC relay uses one-time age keys both on the coordinator and temporarily on the public runner.
+- The **original fixture's** ciphertext records remain visible in public job logs; the **opaque MSVC relay** instead uses temporary public ciphertext prerelease assets. In both cases, private Releases expose plaintext executables/logs to users authorized to access the relevant private repository.
 - The Pi's `gh` credential is used to publish privately. **Never place its personal token on a public runner or in workflow inputs.** Use a short-lived, repository-scoped publishing identity before production automation.
 - SHA-256, GitHub job identity checks, and age authentication are not the same as durable independent source provenance. For high-assurance use, add signed attestations and preserve verification evidence with releases.
 - Pi at-rest storage is not encrypted. Set up an encrypted storage volume before using confidential release contents. Back up any important private releases independently.
 - The fixed public fixture never reads, clones, or forwards a private repository. The public-source safety gate and pinned toy-source hashes reject accidental additional code.
 
-## Tests
+## Tests and deployment status
 
 ```sh
 python3 tools/install_age.py
@@ -214,5 +206,14 @@ python3 -m tools.public_guard --tree-only
 ```
 
 The required PR check runs the Python security tests on Linux. The actual encrypted Windows/Linux build and Pi-to-private-Release integration has separately been tested end to end.
+
+**This public repository is not yet deployed for unattended MSVC dispatch.**
+The protected PR must receive independent approval and merge into `main`;
+then the public `secure-opaque-build.yml` workflow must be available and
+active. The private staging repository additionally needs a separately
+scoped dispatch/Release token, an approved public-main commit pin, explicit
+opt-in, and usable private Actions capacity. **Do not bypass the review gate.**
+See the [private staging README](https://github.com/SUAS-STEM/ci-private-build-lab)
+for the complete prerequisites, read-only readiness commands, and opt-in steps.
 
 For private release verification, checksum readback, and long-term Pi mirroring, see `SUAS-STEM/ci-release-vault`. That repository also contains a separate, **currently billing-blocked**, private-hosted synthetic build demo which is not used by this public CI relay.
