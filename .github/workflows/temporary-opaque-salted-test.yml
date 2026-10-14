@@ -1,5 +1,5 @@
 name: Temporary encrypted Windows MSVC synthetic integration
-run-name: opaque-81852ee2ee7651830d84cd04
+run-name: opaque-c699ea04796529440ee6b2b4
 on:
   push:
     branches: [security/signed-artifact-provenance]
@@ -14,10 +14,10 @@ jobs:
       contents: write
       id-token: write
     env:
-      CI_NONCE: 81852ee2ee7651830d84cd04
+      CI_NONCE: c699ea04796529440ee6b2b4
       CI_PRIVATE_SHA: 88db19eccbd4c2de75265bbc2aec187bf4052fc5
-      CI_OUTPUT_RECIPIENT: age1tsqj4r6qms40v96672688qkhcaevfksvlj5czd4smyt9lkr2kclqyjxj0h
-      CI_BUNDLE_SHA256: e77fcb25a4ecd0c11e1e7471c7c0b08afc19d1f24184d5ad5d0f9a1d6cda3fbe
+      CI_OUTPUT_RECIPIENT: age1jwtjt60yd044gcu0cgklreelkckusxhnk452cx4rpt6uhxe6j58semwxgv
+      CI_BUNDLE_SHA256: 5a4ed2fac5cafb6231b27b2db337c21dd24a5eb9fdfedb9babee5b52e93ec0a8
     steps:
       - name: Checkout vetted public relay code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
