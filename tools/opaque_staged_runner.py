@@ -19,7 +19,6 @@ import tempfile
 from urllib.request import Request, urlopen
 
 from . import opaque_runner as relay
-from .opaque_log_stream import EncryptedLogUploader
 
 MAX_SOURCE_CIPHER = 25 * 1024 * 1024
 PUBLIC_URL = "https://github.com/SUAS-STEM/ci-relay-lab/releases/download/"
@@ -98,8 +97,8 @@ def compile_private():
     nonce, sha, recipient, commitment, root = context()
     # Public GitHub token is supplied ONLY to bootstrap/publish workflow steps.
     # Strip GitHub runtime/ID tokens before running PowerShell too.
-    if os.environ.get("GITHUB_TOKEN"):
-        raise RuntimeError("Unexpected implicit GitHub token in compile step")
+    if os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"):
+        raise RuntimeError("Refusing GitHub credential in plaintext compilation phase")
     work = original(nonce, root)
     keyfile = work / "recipient-key.txt"
     pubfile = work / "recipient.agepub"
@@ -128,28 +127,17 @@ def compile_private():
         inputs = relay.read_packet(unsealed, nonce, sha)
         ciphertext.unlink()
         relay.unpack_into(inputs, work)
-        env = dict(os.environ)
-        for key in ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_RUNTIME_TOKEN",
-                    "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_RUNTIME_URL",
-                    "GITHUB_ENV", "GITHUB_PATH", "CI_PUBLIC_TOKEN", "CI_PRIVATE_TOKEN"):
-            env.pop(key, None)
-        env["CI"] = "true"
-        # Only this trusted transport process holds a token to upload PUBLIC
-        # ciphertext segments. The PowerShell/MSVC subprocess inherits NO
-        # GitHub token. This is not a hardened OS-level isolation boundary.
-        live = EncryptedLogUploader(
-            relay.AGE, recipient, relay.gh, "ci-opaque-" + nonce, output,
-        ) if os.environ.get("GH_TOKEN") else None
-        try:
-            returncode, log = relay.capture_private_build(
-                work, env, on_chunk=live.feed if live else None,
-            )
-        finally:
-            if live and not live.finish():
-                # Streaming is an optimization, not a reason to lose a
-                # successful build. The complete encrypted log follows.
-                print("Encrypted live log preview unavailable; final return intact",
-                      flush=True)
+        # The parent Python transport may hold a PUBLIC-repo-only token to
+        # stream ciphertext. Strip its credentials and ALL known Actions
+        # control variables before spawning an arbitrary PowerShell script.
+        # This is process-environment hygiene, NOT isolation from a malicious
+        # same-user process on the GitHub-hosted runner.
+        env = relay.isolated_build_environment()
+        # No public/private repository token is present in the Python
+        # transport OR its PowerShell child during compilation. The complete
+        # byte-for-byte combined log is encrypted now and only published in
+        # the following separate token-bearing step, after workspace cleanup.
+        returncode, log = relay.capture_private_build(work, env)
         with (output / "result-log.age").open("wb") as writer:
             writer.write(subprocess.run(
                 [str(relay.AGE), "-r", recipient], input=log,

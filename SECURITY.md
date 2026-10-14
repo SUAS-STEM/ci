@@ -63,15 +63,15 @@ its binary and diagnostic log are retained in the private Release.
 The revised three-step public workflow publishes its signed ephemeral public
 recipient with a scoped PUBLIC Release token; a separate build step downloads
 the public ciphertext anonymously and executes the PowerShell/MSVC subprocess
-without `GH_TOKEN` or `GITHUB_TOKEN` in its environment. For incremental
-encrypted diagnostics, the trusted Python parent process temporarily holds
-a PUBLIC-repository-only release-upload token during compilation. A process
-with the same Windows user may still steal that token; environment scrubbing
-is NOT a strong OS isolation boundary. The compiler subprocess now also
+without `GH_TOKEN` or `GITHUB_TOKEN` in **either its own transport Python
+process or the PowerShell child process**. This replaces an earlier optional
+incremental ciphertext streaming implementation that held a PUBLIC-only
+release token in its transport parent while compiling. The compiler subprocess
 filters GitHub Actions control-file paths, OIDC/runner variables, known token
 and credential variable names, and relay metadata while retaining ordinary
 Windows/MSVC execution settings. Local tests enforce that filtering, but a
-same-user or privileged process can still inspect its parent. It then deletes the plaintext build workspace and
+same-user or privileged process can still inspect other processes and the
+runner infrastructure. It then deletes the plaintext build workspace and
 one-time private key before a final step uploads encrypted results using the
 PUBLIC token. This reduces direct token exposure but **does not provide an OS
 isolation boundary** against malicious source or scripts. The staged version
@@ -81,9 +81,11 @@ Release `opaque-ci-38506746075`. It remains experimental and is not approved
 for confidential production source. The small private GitHub Actions caller
 has an on-demand, memory-capped Pi Docker runner implementation and a
 successful separate runner smoke test, but has not completed a full relay run.
-Incremental ciphertext log streaming has passed local cross-repository tests,
-not a new hosted streaming test. The complete final GitHub-signed log hash
-is the authoritative check; early decrypted previews are provisional.
+Incremental ciphertext log streaming passed a prior public hosted test
+(#38600642017), but the **current tokenless compile stage** intentionally
+returns compiler output only after completion. The final GitHub-signed log hash
+remains authoritative. This latest hardening revision has local coverage but
+has not yet received a new hosted Windows execution.
 
 - The original public fixture uses a read-only `GITHUB_TOKEN`. The separate encrypted MSVC worker has **public-repository** `contents:write` permission to exchange short-lived encrypted prerelease assets; it does not receive any PRIVATE source or Release repository credential. This is a narrower trust boundary, not an isolated enclave. A dedicated repository-scoped GitHub App token should replace the Pi's broad personal token for unattended orchestration.
 - Source confidentiality cannot be achieved if proprietary GCS code is built on a public GitHub-hosted runner, even if GitHub Release publication is private. Use a trusted private execution environment for such builds.

@@ -81,8 +81,12 @@ class StagedMSVCWorkflowTests(unittest.TestCase):
             def fake_build(work, run_env, *, on_chunk=None):
                 for name in ("GH_TOKEN", "GITHUB_TOKEN",
                              "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_ENV",
-                             "GITHUB_PATH", "ACTIONS_RUNTIME_TOKEN"):
+                             "GITHUB_PATH", "ACTIONS_RUNTIME_TOKEN",
+                             "VSS_NUGET_EXTERNAL_FEED_ENDPOINTS",
+                             "MY_API_KEY", "CUSTOM_PASSWORD",
+                             "CI_OUTPUT_RECIPIENT", "CI_BUNDLE_SHA256"):
                     self.assertNotIn(name, run_env)
+                self.assertEqual(run_env["CI"], "true")
                 self.assertTrue((work / "build.ps1").is_file())
                 self.assertTrue((work / "CMakeLists.txt").is_file())
                 exe = work / "ci-out" / "program.exe"
@@ -99,7 +103,12 @@ class StagedMSVCWorkflowTests(unittest.TestCase):
                 self.assertIn("recipient.agepub", transfers)
                 self.assertIn("recipient.oidc", transfers)
 
-                with patch.dict(os.environ, env, clear=True):
+                with patch.dict(os.environ, {
+                        **env,
+                        "VSS_NUGET_EXTERNAL_FEED_ENDPOINTS": "private-feed-secret",
+                        "MY_API_KEY": "private-key-secret",
+                        "CUSTOM_PASSWORD": "another-secret",
+                    }, clear=True):
                     worker.compile_private()
                 self.assertFalse(worker.original(NONCE, root).exists())
                 self.assertTrue(worker.staged(NONCE, root).exists())
@@ -137,8 +146,22 @@ class StagedMSVCWorkflowTests(unittest.TestCase):
                 "GITHUB_TOKEN": "SHOULD_NOT_EXIST",
             }
             with patch.dict(os.environ, env, clear=True):
-                with self.assertRaisesRegex(RuntimeError, "Unexpected implicit GitHub token"):
+                with self.assertRaisesRegex(RuntimeError, "Refusing GitHub credential"):
                     worker.compile_private()
+            env.pop("GITHUB_TOKEN")
+            env["GH_TOKEN"] = "MUST_NOT_BE_PRESENT_DURING_COMPILATION"
+            with patch.dict(os.environ, env, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "Refusing GitHub credential"):
+                    worker.compile_private()
+
+    def test_actual_workflow_compile_step_has_no_github_token(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/secure-opaque-build.yml").read_text()
+        compile_step = workflow.split("- name: Compile without repository credentials", 1)[1]
+        compile_step = compile_step.split("- name: Publish only ciphertext", 1)[0]
+        self.assertNotIn("GH_TOKEN:", compile_step)
+        self.assertNotIn("github.token", compile_step)
+        self.assertIn("run: python -m tools.opaque_staged_runner compile", compile_step)
 
 
 if __name__ == "__main__":

@@ -58,13 +58,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -m tools.opaque_staged_runner bootstrap
-      - name: Compile without credentials in PowerShell and stream encrypted logs
+      - name: Compile without repository credentials; retain encrypted diagnostics
         shell: pwsh
-        env:
-          # Only the trusted Python transport needs this PUBLIC-repo token
-          # to upload encrypted log chunks. It is explicitly removed from
-          # the child PowerShell/MSVC environment; not an OS sandbox.
-          GH_TOKEN: ${{ github.token }}
         run: python -m tools.opaque_staged_runner compile
       - name: Publish only ciphertext and GitHub-signed build status
         shell: pwsh
@@ -74,8 +69,9 @@ jobs:
         run: python -m tools.opaque_staged_runner publish
       # Source, build.ps1, binaries, and captured diagnostics are transferred
       # as encrypted files inside a short-lived PUBLIC prerelease.
-      # Transport's Python process receives the PUBLIC-only upload token for
-      # incremental encrypted diagnostics, but the child PowerShell/MSVC
-      # process does not inherit token env. This is NOT OS sandboxing.
+      # The entire compile phase, including transport Python, runs WITHOUT
+      # a GitHub token. Only bootstrap and publish use PUBLIC-only write
+      # credentials, and plaintext workspace/key deletion precedes publish.
+      # GitHub-hosted runner privileged operators still remain trusted.
       # This workflow never uploads Actions artifacts, and it never receives
       # credentials for the private source repository or private Release.

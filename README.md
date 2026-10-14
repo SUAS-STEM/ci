@@ -100,8 +100,9 @@ separate final GitHub-signed whole-log integrity check.
 
 For token isolation, the Windows worker uses three phases: **publish a signed
 ephemeral recipient** (public Release token), **decrypt and compile** (without
-`GH_TOKEN` or `GITHUB_TOKEN` in the child PowerShell/MSVC process), and **publish only encrypted
-results** (public Release token). The compile phase downloads ciphertext
+`GH_TOKEN` or `GITHUB_TOKEN` in either the transport Python process **or** the
+child PowerShell/MSVC process), and **publish only encrypted results** (public
+Release token). The compile phase downloads ciphertext
 anonymously, checks its salted input commitment, and deletes its temporary
 plaintext workspace and one-time private key before the upload phase. This
 three-phase execution, including both signed proofs, was verified in real
@@ -111,15 +112,17 @@ public-main workflow are not yet configured. A small ephemeral Pi Docker
 self-hosted runner has passed a separate smoke test; the Pi performed the
 coordination for the successful synthetic MSVC proof.
 
-The new incremental log transport temporarily supplies a PUBLIC-repo-only
-upload token to the trusted Python build transporter. The child PowerShell
-environment has the token removed, but a compromised process on the same
-Windows runner could still obtain it. Ciphertext-only log segments (up to
-128 KiB plaintext each) can reach the private coordinator before MSVC exits.
-The private side forwards their bytes provisionally and then verifies the
-whole log against the final GitHub-signed SHA-256. This streamed path passed
-local encrypted round-trip tests **and live hosted Windows/MSVC run #38600642017**.
-The final signed log remains the fallback if chunk streaming fails.
+The earlier incremental-log transport temporarily supplied a PUBLIC-repo-only
+upload token to the trusted Python build transporter. That streaming prototype
+passed local round-trip tests **and hosted Windows/MSVC run #38600642017**,
+but exposed a stronger same-user token-theft risk during compilation. The
+current reviewed workflow deliberately **does not pass any GitHub token into
+the build phase**. Instead, it buffers the combined compiler-output bytes on
+the runner, encrypts them, deletes plaintext/key material, and returns the
+complete verbatim log in the final publishing phase. The private coordinator
+then validates the GitHub-signed whole-log SHA-256 before accepting it.
+This safer revision passed local tests but has **not yet run on a hosted
+Windows runner**; the prior streaming run validates the earlier revision.
 
 ### Automatic cleanup after coordinator interruptions
 
