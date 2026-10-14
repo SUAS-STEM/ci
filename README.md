@@ -58,11 +58,8 @@ Release asset substitution cannot fabricate a correctly signed result without
 control of the approved GitHub workflow execution. Compiler output is spooled
 to a private temporary file with a size cap, including diagnostics on timeouts;
 encrypted input downloads are checked against the GitHub asset digest before
-being accepted. These extra result-signing and bounded-output checks were
-added after the initial successful synthetic MSVC run and require their own
-live full-build verification.
-The private coordinator
-validates and decrypts the results, publishes the actual binary, private
+being accepted. These protections passed the later live build described below.
+The private coordinator validates and decrypts the results, publishes the actual binary, private
 build log, checksum, and provenance into a PRIVATE Release, and deletes the
 temporary PUBLIC ciphertext prerelease. **Zero Actions artifacts are used.**
 
@@ -76,10 +73,13 @@ inside the encrypted ZIP, not an Actions workflow input. This protection is
 only as strong as the reviewed workflow and its runner execution.
 
 The real public `windows-2022` MSVC run
-[38478171900](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38478171900)
+[38493277635](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38493277635)
 succeeded using **only synthetic** source and `.ps1` from the isolated private
 [staging repository](https://github.com/SUAS-STEM/ci-private-build-lab). The
-return output is in [PRIVATE Release `opaque-ci-38478171900`](https://github.com/SUAS-STEM/ci-private-build-lab/releases/tag/opaque-ci-38478171900).
+return output is in [PRIVATE Release `opaque-ci-38493277635`](https://github.com/SUAS-STEM/ci-private-build-lab/releases/tag/opaque-ci-38493277635).
+This newer proof also checked the **salted archive hash before unpacking**,
+authenticated both the input key and result hashes using GitHub-signed OIDC,
+and confirmed the private MSVC diagnostics were returned byte-for-byte.
 The public job logs were checked for private synthetic markers and executable
 paths (neither appeared); its Actions artifact inventory was zero. The Pi
 verified the private Release and saved an owner-only archive. The short-lived
