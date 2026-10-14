@@ -41,6 +41,7 @@ ALLOWED_FILES = frozenset({
     "tools/opaque_runner.py",
     "tools/opaque_staged_runner.py",
     "tests/test_opaque_staged_runner.py",
+    "tests/test_opaque_staged_failures.py",
     "tools/opaque_prerelease_cleanup.py",
     "tests/test_opaque_runner.py",
     "tests/test_opaque_prerelease_cleanup.py",
