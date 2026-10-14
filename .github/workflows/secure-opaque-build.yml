@@ -37,6 +37,11 @@ jobs:
     permissions:
       contents: write  # ONLY the public transfer draft, never private repos
       id-token: write  # Short-lived GitHub-signed ephemeral recipient identity
+    env:
+      CI_NONCE: ${{ inputs.nonce }}
+      CI_PRIVATE_SHA: ${{ inputs.source_commit }}
+      CI_OUTPUT_RECIPIENT: ${{ inputs.output_recipient }}
+      CI_BUNDLE_SHA256: ${{ inputs.source_bundle_sha256 }}
     steps:
       - name: Checkout reviewed public-only transport implementation
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -48,16 +53,23 @@ jobs:
       - name: Install pinned and checksum-verified age
         shell: pwsh
         run: python tools/install_age.py
-      - name: Decrypt in runner and execute encrypted PowerShell build
+      - name: Generate and publish signed ephemeral public encryption recipient
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          CI_NONCE: ${{ inputs.nonce }}
-          CI_PRIVATE_SHA: ${{ inputs.source_commit }}
-          CI_OUTPUT_RECIPIENT: ${{ inputs.output_recipient }}
-          CI_BUNDLE_SHA256: ${{ inputs.source_bundle_sha256 }}
-        run: python -m tools.opaque_runner
+        run: python -m tools.opaque_staged_runner bootstrap
+      - name: Decrypt and build with MSVC without GitHub repository token
+        shell: pwsh
+        run: python -m tools.opaque_staged_runner compile
+      - name: Publish only ciphertext and GitHub-signed build status
+        shell: pwsh
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.opaque_staged_runner publish
       # Source, build.ps1, binaries, and captured diagnostics are transferred
       # as encrypted files inside a short-lived PUBLIC prerelease.
+      # Only key and result publication steps receive the public GH_TOKEN.
+      # Compiled private code executes in a step without repository token env.
       # This workflow never uploads Actions artifacts, and it never receives
       # credentials for the private source repository or private Release.

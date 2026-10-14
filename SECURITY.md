@@ -42,14 +42,14 @@ An additional OIDC JWT signed by GitHub binds the exact raw compiler-log hash,
 compiled executable hash, and process exit code to the same approved runner,
 workflow revision, source commit, and one-time keys. The private coordinator
 rejects mismatched JWTs before printing diagnostics or publishing outputs.
-This additional result-signing step has local failure-path tests but is not
-part of the earlier successful full Windows build #38478171900.
+This additional result-signing step has local failure-path tests and passed
+the later successful full Windows build #38493277635.
 The GitHub-signed return-channel handshake and MSVC compilation subsequently
 passed in public run #38484774417; its private Release step initially failed
 because GitHub's draft listing was delayed. The private publisher now retries
 read visibility and rejects unexpected assets without overwriting them. A
-complete new hosted private Release publication using those exact revisions
-remains unverified.
+subsequent complete private Release publication was verified in public build
+#38493277635 and private Release `opaque-ci-38493277635`.
 
 The optional daily PUBLIC cleanup workflow uses a PUBLIC-repo-only write
 token to remove recognized ciphertext-only prereleases older than 24 hours.
@@ -57,15 +57,18 @@ It refuses changes to release ownership, asset digests and expected filenames,
 and skips an active public runner. It never accesses private source, artifacts,
 or credentials. This is a best-effort recovery measure, not a guarantee of
 immediate deletion after a catastrophic coordinator failure.
-The successful synthetic proof is public Actions run #38478171900; the
-resulting binary/log exist only in private Release `opaque-ci-38478171900`.
+The successful current synthetic proof is public Actions run #38493277635;
+its binary and diagnostic log are retained in the private Release.
 
-The PowerShell subprocess has the public `GH_TOKEN` and `GITHUB_TOKEN`
-environment variables removed, but the parent runner process still holds the
-public repository's release-upload token. This **does not provide a strong OS
-isolation boundary** against malicious source or scripts. The protocol is an
-experimental demonstration; it is not approved for confidential production
-source, credentials, or unrelated third-party projects.
+The revised three-step public workflow publishes its signed ephemeral public
+recipient with a scoped PUBLIC Release token; a separate build step downloads
+the public ciphertext anonymously and executes PowerShell without `GH_TOKEN`
+or `GITHUB_TOKEN` supplied. It then deletes the plaintext build workspace and
+one-time private key before a final step uploads encrypted results using the
+PUBLIC token. This reduces direct token exposure but **does not provide an OS
+isolation boundary** against malicious source or scripts. The staged version
+has passed local tests but not yet a real Windows Actions build. It remains
+experimental and is not approved for confidential production source.
 
 - The original public fixture uses a read-only `GITHUB_TOKEN`. The separate encrypted MSVC worker has **public-repository** `contents:write` permission to exchange short-lived encrypted prerelease assets; it does not receive any PRIVATE source or Release repository credential. This is a narrower trust boundary, not an isolated enclave. A dedicated repository-scoped GitHub App token should replace the Pi's broad personal token for unattended orchestration.
 - Source confidentiality cannot be achieved if proprietary GCS code is built on a public GitHub-hosted runner, even if GitHub Release publication is private. Use a trusted private execution environment for such builds.

@@ -85,6 +85,27 @@ paths (neither appeared); its Actions artifact inventory was zero. The Pi
 verified the private Release and saved an owner-only archive. The short-lived
 public prerelease and one-time branch test workflow were removed afterward.
 
+For stronger token isolation, the Windows worker now has three independent
+steps: **publish the signed ephemeral recipient (public Release token),
+decrypt/compile without `GH_TOKEN` or `GITHUB_TOKEN`, and publish only
+encrypted results (public Release token)**. It downloads public ciphertext
+anonymously, verifies the salted input commitment, and deletes the plaintext
+workspace and per-run decryption key before the final upload step. Local
+three-step encryption tests and an anonymous GitHub Release download passed.
+This revised three-step version still requires a real Windows integration
+run; the prior successful Windows run used the older single-step worker.
+
+For additional defense in depth, the Windows worker is now split into three
+phases: **publish authenticated recipient (public Release token), decrypt and
+compile (NO `GH_TOKEN`/`GITHUB_TOKEN` environment variable), and publish
+encrypted results (public Release token)**. The compile phase downloads the
+encrypted source anonymously from the public prerelease, checks the salted
+source commitment, and deletes its plaintext workspace and one-time private
+key **before** entering the result-upload phase. An isolated real-age
+three-phase round trip and anonymous public-release download have passed.
+The three-step version still requires its own hosted Windows integration test;
+the earlier successful run used the prior single-step worker.
+
 ### Automatic cleanup after coordinator interruptions
 
 The private coordinator normally deletes its temporary public encrypted
