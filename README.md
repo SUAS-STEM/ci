@@ -133,6 +133,15 @@ public-main workflow are not yet configured. A small ephemeral Pi Docker
 self-hosted runner has passed a separate smoke test; the Pi performed the
 coordination for the successful synthetic MSVC proof.
 
+Post-proof changes on the unmerged public security branch add a workflow-owned
+PowerShell checkout-integrity verifier, a workflow-owned ciphertext publisher
+that executes no checked-out Python, and Windows Job Object containment for
+MSVC descendants. The PR's Windows security check tests synthetic tampering,
+CRLF handling, and child-process termination without an MSVC build. These
+changes have **not** yet been proven end to end by the October 14 run. They
+reduce accidental/script-substitution exposure, but do not isolate a malicious
+Windows hosted-runner process from eventual job credentials.
+
 The earlier incremental-log transport temporarily supplied a PUBLIC-repo-only
 upload token to the trusted Python build transporter. That streaming prototype
 passed local round-trip tests **and hosted Windows/MSVC run #38600642017**,
@@ -247,7 +256,11 @@ python3 -m unittest discover -s tests -q
 python3 -m tools.public_guard --tree-only
 ```
 
-The required PR check runs the Python security tests on Linux. The actual encrypted Windows/Linux build and Pi-to-private-Release integration has separately been tested end to end.
+The public PR runs Python security tests on Linux and a limited Windows
+PowerShell/process-isolation regression check with synthetic source (not a
+private build). The earlier encrypted Windows/Linux build and Pi-to-private
+Release integration passed separately; that proof predates these new hardening
+changes.
 
 **This public repository is not yet deployed for unattended MSVC dispatch.**
 The protected PR must receive independent approval and merge into `main`;

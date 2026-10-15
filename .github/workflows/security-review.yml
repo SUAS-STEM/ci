@@ -24,3 +24,26 @@ jobs:
         run: python3 tools/install_age.py
       - name: Regression tests for security guard
         run: python3 -m unittest discover -s tests -v
+
+  # Test the *actual inline* token-free PowerShell gate using temporary
+  # synthetic Git repositories. No encrypted source, MSVC compile, tokens,
+  # Actions artifacts or private code are involved.
+  windows-integrity-gate:
+    name: windows-inline-integrity-gate
+    runs-on: windows-2022
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout reviewed synthetic tests
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Exercise real PowerShell gate and tampering regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python -m unittest discover -s tests -p test_opaque_checkout_integrity.py -v
+      - name: Check Windows MSVC child-process job containment
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python -m unittest discover -s tests -p test_opaque_runner.py -v

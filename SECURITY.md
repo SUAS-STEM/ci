@@ -86,6 +86,29 @@ Release `opaque-ci-38674511480`. It remains experimental and is not approved
 for confidential production source. The small private GitHub Actions caller
 has an on-demand, memory-capped Pi Docker runner implementation and a
 successful separate runner smoke test, but has not completed a full relay run.
+
+The feature-branch hardening after the October 14 proof replaces the
+post-compilation Python integrity import with **inline, workflow-owned
+PowerShell**. It compares every tracked file's normalized bytes against the
+Git blob at the reviewed workflow commit, rejects untracked and Git-ignored
+bytecode, and runs before any upload credential returns. The following
+token-bearing publisher now uses inline PowerShell HTTPS calls rather than
+importing scripts from the mutable checkout; the GitHub-signed result audience
+remains bound to the ciphertext's logged digests and exit code. MSVC child
+processes are assigned to a kill-on-close Windows Job Object, with the goal of
+preventing detached child processes from surviving a successful compilation.
+The public PR's separate Windows security job exercises these defenses with
+synthetic source, without starting a private build or using Actions artifacts.
+**These changes still require independent PR review and a new end-to-end
+staging proof; the October 14 proof predates them.**
+
+None of these measures prevent a sufficiently privileged or malicious runner
+process from inspecting decrypted inputs, altering executable tooling, racing
+the integrity check, or accessing the same job's eventual public-repository
+token. The Job Object is not a sandbox and process assignment has a short
+startup race. For an adversarial source package, isolating credential-bearing
+publication on a fresh runner with an independently authenticated encrypted
+transport would be materially stronger than same-runner step separation.
 Incremental ciphertext log streaming passed a prior public hosted test
 (#38600642017), but the **current tokenless compile stage** intentionally
 returns compiler output only after completion. The final GitHub-signed log hash

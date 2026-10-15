@@ -255,6 +255,31 @@ class OpaquePacketTests(unittest.TestCase):
             self.assertFalse(marker.exists(),
                              "MSVC/CMake child process survived build cancellation")
 
+    @unittest.skipUnless(os.name == "nt", "Windows job object containment")
+    def test_success_kills_background_msbuild_descendants(self):
+        # A seemingly successful PowerShell script may start a detached child
+        # which would outlive the compile phase and later see the upload token.
+        # The kill-on-close job must terminate it even on success.
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "background-worker-survived"
+            child = ("import time,pathlib;time.sleep(2);"
+                     f"pathlib.Path({str(marker)!r}).write_text('orphaned')")
+            parent = (
+                "import subprocess,sys;"
+                f"subprocess.Popen([sys.executable,'-c',{child!r}],"
+                "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,"
+                "creationflags=subprocess.CREATE_NEW_PROCESS_GROUP);"
+                "print('compile succeeded',flush=True)"
+            )
+            status, log = capture_private_build(
+                Path(temp), os.environ.copy(),
+                command=[sys.executable, "-c", parent], timeout=10)
+            self.assertEqual(status, 0)
+            self.assertIn(b"compile succeeded", log)
+            time.sleep(2.3)
+            self.assertFalse(marker.exists(),
+                             "Background compiler survived successful build")
+
     def test_refuse_unbounded_output_and_unsafe_path(self):
         with tempfile.TemporaryDirectory() as temp:
             command = [sys.executable, "-c", "print('a' * 20000)"]

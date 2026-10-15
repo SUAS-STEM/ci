@@ -42,6 +42,8 @@ jobs:
       CI_PRIVATE_SHA: ${{ inputs.source_commit }}
       CI_OUTPUT_RECIPIENT: ${{ inputs.output_recipient }}
       CI_BUNDLE_SHA256: ${{ inputs.source_bundle_sha256 }}
+      # A post-build integrity check rejects all Python bytecode caches.
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Checkout reviewed public-only transport implementation
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -75,12 +77,204 @@ jobs:
             Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
           }
           python -m tools.opaque_staged_runner compile
+      - name: Verify PUBLIC relay implementation unchanged after compiling
+        shell: pwsh
+        # This is workflow-owned PowerShell, NOT a Python module imported from
+        # the potentially tampered checkout. It runs WITHOUT a release token.
+        # The workflow SHA is embedded from GitHub context, not read from a
+        # mutable environment variable or a build-generated file.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $approved = '${{ github.sha }}'
+          if ($approved -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid public revision' }
+          $root = (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE).Path
+          Set-Location -LiteralPath $root
+          $head = (& git rev-parse HEAD)
+          if ($LASTEXITCODE -ne 0 -or $head.Trim() -cne $approved) {
+            throw 'Unexpected public checkout revision'
+          }
+          # Read the *committed* tree, not Git's mutable index, config filters,
+          # status, cached stat data or an untrusted Python allowlist.
+          $entries = @(& git ls-tree -r --full-tree $approved)
+          if ($LASTEXITCODE -ne 0 -or $entries.Count -lt 30 -or $entries.Count -gt 100) {
+            throw 'Invalid committed public inventory'
+          }
+          $tracked = @{}
+          foreach ($entry in $entries) {
+            if ($entry -cnotmatch '^(100644|100755) blob ([a-f0-9]{40})\t([A-Za-z0-9_./-]+)$') {
+              throw 'Unsafe public tracked file type or path'
+            }
+            $expectedBlob = $Matches[2]
+            $name = $Matches[3]
+            if ($name -match '(^|/)\.\.?(/|$)' -or $tracked.ContainsKey($name)) {
+              throw 'Unsafe public tracked path'
+            }
+            $path = Join-Path $root $name
+            $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw 'Changed public tracked file type'
+            }
+            $bytes = [IO.File]::ReadAllBytes($path)
+            if ($bytes.Length -gt 200000) { throw 'Oversized public tracked file' }
+            # GitHub's Windows checkout can legitimately expand LF to CRLF.
+            # Remove ONLY CR directly followed by LF; reject any bare CR.
+            $normalized = [Collections.Generic.List[byte]]::new($bytes.Length)
+            for ($i = 0; $i -lt $bytes.Length; $i++) {
+              if ($bytes[$i] -eq 13) {
+                if ($i + 1 -ge $bytes.Length -or $bytes[$i + 1] -ne 10) {
+                  throw 'Unexpected public line ending'
+                }
+                continue
+              }
+              $normalized.Add($bytes[$i])
+            }
+            $payload = $normalized.ToArray()
+            $header = [Text.Encoding]::ASCII.GetBytes("blob $($payload.Length)`0")
+            $blob = [byte[]]::new($header.Length + $payload.Length)
+            [Array]::Copy($header, 0, $blob, 0, $header.Length)
+            [Array]::Copy($payload, 0, $blob, $header.Length, $payload.Length)
+            $actualBlob = [Convert]::ToHexString([Security.Cryptography.SHA1]::HashData($blob)).ToLowerInvariant()
+            if ($actualBlob -cne $expectedBlob) { throw 'Changed public tracked file' }
+            $tracked[$name] = $true
+          }
+          # Check the actual directory, including Git-ignored *.pyc files:
+          # poisoned cached bytecode must never be importable during publish.
+          foreach ($top in (Get-ChildItem -LiteralPath $root -Force)) {
+            if ($top.Name -in @('.git', '.age-bin')) { continue }
+            if ($top.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+              throw 'Untrusted public reparse point'
+            }
+            $items = if ($top.PSIsContainer) {
+              @(Get-ChildItem -LiteralPath $top.FullName -Recurse -Force)
+            } else { @($top) }
+            foreach ($item in $items) {
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw 'Untrusted public reparse point'
+              }
+              if ($item.PSIsContainer) { continue }
+              $relative = [IO.Path]::GetRelativePath($root, $item.FullName).Replace('\', '/')
+              if (-not $tracked.ContainsKey($relative)) {
+                throw 'Untracked or ignored public checkout file'
+              }
+            }
+          }
+          $ageFiles = @(Get-ChildItem -LiteralPath (Join-Path $root '.age-bin') -Force)
+          if ($ageFiles.Count -ne 2 -or
+              @($ageFiles | Where-Object { $_.Name -notin @('age.exe', 'age-keygen.exe') -or
+                  $_.PSIsContainer -or ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }).Count -ne 0) {
+            throw 'Unexpected installed encryption executable inventory'
+          }
+          Write-Host 'Verified unmodified public checkout without importing checked-out code'
       - name: Publish only ciphertext and GitHub-signed build status
         shell: pwsh
         if: ${{ success() }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python -m tools.opaque_staged_runner publish
+        # IMPORTANT: Never import or execute checkout scripts after the token
+        # comes back. This workflow-owned publisher uses only built-in PowerShell
+        # and GitHub HTTPS APIs; the prior token-free step verifies the checkout.
+        # A surviving same-user process remains an inherent hosted-runner risk.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            $nonce = $env:CI_NONCE
+            $privateSha = $env:CI_PRIVATE_SHA
+            $recipient = $env:CI_OUTPUT_RECIPIENT
+            if ($nonce -cnotmatch '^[a-f0-9]{24}$' -or
+                $privateSha -cnotmatch '^[a-f0-9]{40}$' -or
+                $recipient -cnotmatch '^age1[023456789acdefghjklmnpqrstuvwxyz]{58}$') {
+              throw 'Invalid encrypted result context'
+            }
+            $output = Join-Path $env:RUNNER_TEMP "ci-opaque-ciphertext-$nonce"
+            $statusFile = Join-Path $output 'result-status.json'
+            $status = Get-Content -LiteralPath $statusFile -Raw -ErrorAction Stop | ConvertFrom-Json
+            if ($status.nonce -cne $nonce -or
+                $status.source_commit -cne $privateSha -or
+                $status.exit_code -isnot [long] -and $status.exit_code -isnot [int] -or
+                $status.log_sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+                $status.binary_sha256 -cnotmatch '^[a-f0-9]{64}$') {
+              throw 'Invalid encrypted build status'
+            }
+            $workerRecipient = (Get-Content -LiteralPath (Join-Path $output 'recipient.agepub') -Raw).Trim()
+            if ($workerRecipient -cnotmatch '^age1[023456789acdefghjklmnpqrstuvwxyz]{58}$') {
+              throw 'Invalid ephemeral worker identity'
+            }
+            $files = @('result-log.age', 'result-status.age')
+            if ($status.exit_code -eq 0) { $files += 'result-exe.age' }
+            foreach ($name in $files) {
+              $item = Get-Item -LiteralPath (Join-Path $output $name) -ErrorAction Stop
+              if ($item.PSIsContainer -or
+                  ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                  $item.Length -lt 1 -or $item.Length -gt 100MB) {
+                throw 'Invalid encrypted result asset'
+              }
+            }
+            # This field order and NUL delimiter exactly match the PRIVATE
+            # coordinator's oidc_result_audience verification algorithm.
+            $audienceFields = @(
+              'ci-opaque-result-v1', $nonce, $privateSha, $recipient,
+              $workerRecipient, [string]$status.exit_code,
+              $status.log_sha256, $status.binary_sha256
+            )
+            $audienceBytes = [Text.Encoding]::ASCII.GetBytes(
+              [string]::Join([char]0, [string[]]$audienceFields))
+            $audienceHash = [Convert]::ToHexString(
+              [Security.Cryptography.SHA256]::HashData($audienceBytes)).ToLowerInvariant()
+            $audience = "ci-opaque-result-v1:$audienceHash"
+            # Restrict the OIDC request to GitHub's issuance endpoint.
+            $oidcUrl = [uri]$env:ACTIONS_ID_TOKEN_REQUEST_URL
+            if ($oidcUrl.Scheme -cne 'https' -or
+                -not $oidcUrl.Host.EndsWith('.actions.githubusercontent.com', [StringComparison]::Ordinal) -or
+                $oidcUrl.Port -ne 443 -or $oidcUrl.UserInfo -or $oidcUrl.Fragment -or
+                -not $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+              throw 'OIDC runner identity unavailable'
+            }
+            $separator = if ($oidcUrl.Query) { '&' } else { '?' }
+            $proofResponse = Invoke-RestMethod -Method Get -Uri (
+              $oidcUrl.AbsoluteUri + $separator + 'audience=' + [uri]::EscapeDataString($audience)
+            ) -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" }
+            if ($proofResponse.value -cnotmatch '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' -or
+                $proofResponse.value.Length -gt 16000) {
+              throw 'Missing GitHub-signed result identity'
+            }
+            $proofPath = Join-Path $output 'result.oidc'
+            [IO.File]::WriteAllText($proofPath, "$($proofResponse.value)`n",
+              [Text.Encoding]::ASCII)
+            $files += 'result.oidc'
+            # Upload ciphertext only. Use NO executable from the checkout,
+            # its writable .age-bin, the build directory, or the system PATH.
+            $headers = @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept = 'application/vnd.github+json'
+              'X-GitHub-Api-Version' = '2022-11-28'
+              'User-Agent' = 'ci-relay-lab/opaque-msvc'
+            }
+            $tag = "ci-opaque-$nonce"
+            $release = Invoke-RestMethod -Method Get -Headers $headers -Uri (
+              "https://api.github.com/repos/SUAS-STEM/ci-relay-lab/releases/tags/$tag")
+            if ($release.tag_name -cne $tag -or $release.draft -ne $false -or
+                $release.prerelease -ne $true) {
+              throw 'Unexpected encrypted transfer release'
+            }
+            foreach ($name in $files) {
+              if (@($release.assets | Where-Object { $_.name -ceq $name }).Count -ne 0) {
+                throw 'Duplicate encrypted result asset'
+              }
+              $address = "https://uploads.github.com/repos/SUAS-STEM/ci-relay-lab/releases/$($release.id)/assets?name=$name"
+              $asset = Invoke-RestMethod -Method Post -Headers $headers -Uri $address -InFile (
+                Join-Path $output $name) -ContentType 'application/octet-stream'
+              if ($asset.name -cne $name -or $asset.state -cne 'uploaded') {
+                throw 'Encrypted result upload not confirmed'
+              }
+            }
+            Remove-Item -LiteralPath $output -Recurse -Force
+            Write-Host 'Encrypted authenticated MSVC results published'
+            if ($status.exit_code -ne 0) { throw 'Encrypted MSVC result reports failure' }
+          } catch {
+            # Never leak decrypted compiler diagnostics or internal paths.
+            [Console]::Error.WriteLine('Encrypted result publication failed')
+            exit 1
+          }
       # Source, build.ps1, binaries, and captured diagnostics are transferred
       # as encrypted files inside a short-lived PUBLIC prerelease.
       # The entire compile phase, including transport Python, runs WITHOUT
