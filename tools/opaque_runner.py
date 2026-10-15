@@ -137,9 +137,12 @@ def read_packet(blob, nonce, source_commit):
         windows_names = set()
         total = 0
         for member in members:
-            name = member.filename
+            # On Windows, Python's ZipInfo.filename silently converts raw
+            # archive backslashes to '/'. Validate orig_filename to reject
+            # unsafe spellings BEFORE any platform-specific normalization.
+            name = member.orig_filename
             normalized = name.casefold()
-            if (not safe_bundle_name(name)
+            if (name != member.filename or not safe_bundle_name(name)
                     or normalized in windows_names or member.is_dir()
                     or ((member.external_attr >> 16) & 0o170000) == 0o120000
                     or member.file_size > 3 * 1024 * 1024):
@@ -175,9 +178,9 @@ def unpack_into(files, work):
 class WindowsBuildJob:
     """Contain MSVC/PowerShell descendants in a kill-on-close Windows job.
 
-    Defense in depth: assignment follows Popen, leaving a small startup race.
-    An administrator or privileged hosted-runner operator can still escape
-    this boundary; it is NOT a security sandbox.
+    The child is created SUSPENDED and assigned before resuming its main thread,
+    avoiding the Popen-to-job assignment race. An administrator or privileged
+    hosted-runner operator can still escape; this is NOT a security sandbox.
     """
 
     def __init__(self, process):
@@ -242,6 +245,51 @@ class WindowsBuildJob:
             self.close()
             raise
 
+    def resume(self, process):
+        """Resume only the primary thread of an as-yet suspended Windows child."""
+        import ctypes
+        from ctypes import wintypes
+
+        class ThreadEntry(ctypes.Structure):
+            _fields_ = [(name, wintypes.DWORD) for name in (
+                "dwSize", "cntUsage", "th32ThreadID", "th32OwnerProcessID",
+                "tpBasePri", "tpDeltaPri", "dwFlags",
+            )]
+
+        kernel = self._kernel
+        kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry)]
+        kernel.Thread32First.restype = wintypes.BOOL
+        kernel.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry)]
+        kernel.Thread32Next.restype = wintypes.BOOL
+        kernel.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenThread.restype = wintypes.HANDLE
+        kernel.ResumeThread.argtypes = [wintypes.HANDLE]
+        kernel.ResumeThread.restype = wintypes.DWORD
+        snapshot = kernel.CreateToolhelp32Snapshot(0x00000004, 0)  # TH32CS_SNAPTHREAD
+        if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            entry = ThreadEntry()
+            entry.dwSize = ctypes.sizeof(ThreadEntry)
+            found = kernel.Thread32First(snapshot, ctypes.byref(entry))
+            while found:
+                if entry.th32OwnerProcessID == process.pid:
+                    thread = kernel.OpenThread(0x0002, False, entry.th32ThreadID)
+                    if not thread:
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    try:
+                        if kernel.ResumeThread(thread) != 1:
+                            raise RuntimeError("Windows build thread was not suspended")
+                    finally:
+                        kernel.CloseHandle(thread)
+                    return
+                found = kernel.Thread32Next(snapshot, ctypes.byref(entry))
+            raise RuntimeError("Suspended Windows build thread not found")
+        finally:
+            kernel.CloseHandle(snapshot)
+
     def close(self):
         if self._handle:
             self._kernel.CloseHandle(self._handle)
@@ -287,7 +335,10 @@ def capture_private_build(work, env, *, command=None, timeout=1200,
                           "-NonInteractive", "-File", str(work / "build.ps1")]
     descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as output:
-        flags = (subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
+        # CREATE_SUSPENDED is 0x00000004. Attach the job BEFORE any decrypted
+        # PowerShell is allowed to run; even immediate-exit scripts are covered.
+        flags = ((subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000004)
+                 if os.name == "nt" else 0)
         process = subprocess.Popen(
             command, cwd=work, env=env, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, bufsize=0,
@@ -297,11 +348,14 @@ def capture_private_build(work, env, *, command=None, timeout=1200,
         if os.name == "nt":
             try:
                 job = WindowsBuildJob(process)
+                job.resume(process)
             except BaseException:
                 try:
                     terminate_build_tree(process)
                     process.wait(timeout=10)
                 finally:
+                    if job is not None:
+                        job.close()
                     process.stdout.close()
                 raise RuntimeError("Unable to contain MSVC descendant processes")
         oversized = threading.Event()

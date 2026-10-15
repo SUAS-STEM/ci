@@ -105,8 +105,10 @@ staging proof; the October 14 proof predates them.**
 None of these measures prevent a sufficiently privileged or malicious runner
 process from inspecting decrypted inputs, altering executable tooling, racing
 the integrity check, or accessing the same job's eventual public-repository
-token. The Job Object is not a sandbox and process assignment has a short
-startup race. For an adversarial source package, isolating credential-bearing
+token. The Job Object is not a sandbox. Windows build processes are now
+created suspended before job assignment, so even immediate-exit scripts are
+contained before execution, but privileged tampering is still possible.
+For an adversarial source package, isolating credential-bearing
 publication on a fresh runner with an independently authenticated encrypted
 transport would be materially stronger than same-runner step separation.
 Incremental ciphertext log streaming passed a prior public hosted test

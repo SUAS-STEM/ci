@@ -56,6 +56,11 @@ class OpaquePacketTests(unittest.TestCase):
 
     def packet(self, filename="src/sample.cpp", content=b"int main(){}", nonce=None):
         output = io.BytesIO()
+        # zipfile.ZipInfo normalizes backslashes into slashes on Windows,
+        # even when decoding a received archive. Write the portable form,
+        # then patch only the archive's filename bytes to model a malicious
+        # Linux-created ZIP without allowing Windows to sanitize the input.
+        written_name = filename.replace("\\", "/")
         with zipfile.ZipFile(output, "w") as archive:
             archive.writestr("manifest.json", json.dumps({
                 "nonce": nonce or self.NONCE,
@@ -64,8 +69,12 @@ class OpaquePacketTests(unittest.TestCase):
                 "output": "ci-out/program.exe",
             }))
             archive.writestr("build.ps1", b"Write-Output 'test'")
-            archive.writestr(filename, content)
-        return output.getvalue()
+            archive.writestr(written_name, content)
+        data = output.getvalue()
+        if written_name != filename:
+            data = data.replace(written_name.encode("ascii"),
+                                filename.encode("ascii"))
+        return data
 
     def test_valid_private_packet(self):
         files = read_packet(self.packet(), self.NONCE, self.SHA)
