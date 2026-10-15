@@ -1,0 +1,58 @@
+name: Temporary encrypted Windows MSVC synthetic integration
+run-name: opaque-1d6a49d4f9031acf678c03ff
+on:
+  push:
+    branches: [security/signed-artifact-provenance]
+permissions:
+  contents: read
+jobs:
+  opaque-windows-msvc:
+    if: github.repository == 'SUAS-STEM/ci-relay-lab' && github.ref == 'refs/heads/security/signed-artifact-provenance' && github.actor == 'eschan145' && github.event_name == 'push'
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      CI_NONCE: 1d6a49d4f9031acf678c03ff
+      CI_PRIVATE_SHA: 5a9d006635f9fefafc1ca462e7aed50df473f9cd
+      CI_OUTPUT_RECIPIENT: age1v45f77wm7zr6h8lg3e926q6trrseyycr3a3q0wedx6rpnmhenynqp93r2l
+      CI_BUNDLE_SHA256: 5408c0c46bb21a214d27495224bc0d4f3ea89b89a574b0704aec2c2f0bf2278b
+    steps:
+      - name: Checkout vetted public relay code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Public-only source guard
+        shell: pwsh
+        run: python -m tools.public_guard --tree-only
+      - name: Install pinned age crypto
+        shell: pwsh
+        run: python tools/install_age.py
+      - name: Publish GitHub-signed per-run recipient using public token
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.opaque_staged_runner bootstrap
+      - name: Compile decrypted synthetic source without repository token
+        shell: pwsh
+        run: |
+          # Exercise the SAME credential-stripped compilation as the reviewed
+          # permanent public workflow. The public token is ONLY available to
+          # bootstrap and publish, never to this Python/PowerShell process.
+          $remove = @(
+            'GH_TOKEN', 'GITHUB_TOKEN',
+            'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL',
+            'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL',
+            'GITHUB_ENV', 'GITHUB_OUTPUT', 'GITHUB_PATH',
+            'GITHUB_STEP_SUMMARY', 'GITHUB_STATE'
+          )
+          foreach ($name in $remove) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+          }
+          python -m tools.opaque_staged_runner compile
+      - name: Return only encrypted output with signed status
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.opaque_staged_runner publish
