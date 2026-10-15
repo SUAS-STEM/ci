@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -99,6 +100,41 @@ def download_source(tag, target):
         file.write(blob)
 
 
+def encrypt_binary_file(source, target, recipient, *, timeout=90):
+    """Stream an MSVC executable into age without copying it into RAM.
+
+    A failed/timed-out encryption must never leave a publishable partial
+    ciphertext. Use a new owner-only output path and clean it on all errors.
+    """
+    if (relay.RECIPIENT.fullmatch(recipient) is None
+            or not source.is_file() or source.is_symlink()
+            or target.exists() or target.is_symlink()):
+        raise RuntimeError("Invalid streaming MSVC encryption input/output")
+    info = source.lstat()
+    if not stat.S_ISREG(info.st_mode) or not 1024 < info.st_size < 100 * 1024 * 1024:
+        raise RuntimeError("Compiled MSVC binary outside approved size limit")
+    with source.open("rb") as binary:
+        if binary.read(2) != b"MZ":
+            raise RuntimeError("Compiled MSVC output is not a Windows PE executable")
+        binary.seek(0)
+        digest = hashlib.file_digest(binary, "sha256").hexdigest()
+        binary.seek(0)
+        output_fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            with os.fdopen(output_fd, "wb") as ciphertext:
+                subprocess.run([str(relay.AGE), "-r", recipient],
+                               stdin=binary, stdout=ciphertext,
+                               stderr=subprocess.PIPE, check=True,
+                               timeout=timeout)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+    if not target.is_file() or target.stat().st_size <= 0:
+        target.unlink(missing_ok=True)
+        raise RuntimeError("MSVC encryption produced no ciphertext")
+    return digest
+
+
 def compile_private():
     nonce, sha, recipient, commitment, root = context()
     # Public GitHub token is supplied ONLY to bootstrap/publish workflow steps.
@@ -151,16 +187,8 @@ def compile_private():
         binary_sha = "0" * 64
         exe = work / "ci-out" / "program.exe"
         if returncode == 0:
-            if (exe.is_symlink() or not exe.is_file()
-                    or not 1024 < exe.stat().st_size < 100 * 1024 * 1024):
-                raise RuntimeError("Compiled MSVC output missing or oversized")
-            data = exe.read_bytes()
-            if not data.startswith(b"MZ"):
-                raise RuntimeError("Compiled output is not a Windows PE executable")
-            binary_sha = hashlib.sha256(data).hexdigest()
-            (output / "result-exe.age").write_bytes(subprocess.run(
-                [str(relay.AGE), "-r", recipient], input=data,
-                capture_output=True, check=True, timeout=70).stdout)
+            binary_sha = encrypt_binary_file(
+                exe, output / "result-exe.age", recipient, timeout=70)
         status = {"nonce": nonce, "source_commit": sha, "exit_code": returncode,
                   "log_sha256": hashlib.sha256(log).hexdigest(),
                   "binary_sha256": binary_sha}

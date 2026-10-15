@@ -39,6 +39,52 @@ def zip_bundle():
 @unittest.skipUnless(relay.AGE.is_file() and relay.KEYGEN.is_file(),
                      "Requires local pinned age and age-keygen executables")
 class StagedMSVCWorkflowTests(unittest.TestCase):
+    def test_stream_msvc_binary_to_age_without_reading_it_into_python_memory(self):
+        with tempfile.TemporaryDirectory(prefix="opaque-streamed-pe-") as scratch:
+            root = Path(scratch)
+            identity = root / "return-key"
+            result = subprocess.run([str(relay.KEYGEN), "-o", str(identity)],
+                                    capture_output=True, text=True, check=True,
+                                    timeout=15)
+            recipient = re.search(
+                r"age1[023456789acdefghjklmnpqrstuvwxyz]{58}",
+                result.stderr).group()
+            source = root / "msvc.exe"
+            output = root / "encrypted.age"
+            binary = b"MZ" + (b"sample-pe-test-data" * 150000)
+            source.write_bytes(binary)
+            with patch.object(Path, "read_bytes",
+                              side_effect=AssertionError("Whole-file read is forbidden")):
+                digest = worker.encrypt_binary_file(source, output, recipient)
+            self.assertEqual(digest, hashlib.sha256(binary).hexdigest())
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            plaintext = subprocess.run(
+                [str(relay.AGE), "-d", "-i", str(identity), str(output)],
+                check=True, capture_output=True, timeout=20).stdout
+            self.assertEqual(plaintext, binary)
+            with self.assertRaisesRegex(RuntimeError, "input/output"):
+                worker.encrypt_binary_file(source, output, recipient)
+            self.assertEqual(output.stat().st_size > 0, True)
+
+    def test_failed_streaming_encryption_removes_partial_ciphertext(self):
+        with tempfile.TemporaryDirectory(prefix="opaque-streamed-fail-") as scratch:
+            root = Path(scratch)
+            source = root / "msvc.exe"
+            source.write_bytes(b"MZ" + b"x" * 1400)
+            target = root / "partial.age"
+
+            def fail_after_writing(*_args, **kwargs):
+                kwargs["stdout"].write(b"partial-private-encrypted-result")
+                raise subprocess.CalledProcessError(1, _args[0])
+
+            with patch.object(worker.subprocess, "run", side_effect=fail_after_writing):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    worker.encrypt_binary_file(source, target, "age1" + "q" * 58)
+            self.assertFalse(target.exists())
+            with self.assertRaisesRegex(RuntimeError, "input/output"):
+                worker.encrypt_binary_file(source, target, "invalid-public-key")
+            self.assertFalse(target.exists())
+
     def test_three_phase_authenticated_ciphertext_roundtrip(self):
         source = zip_bundle()
         with tempfile.TemporaryDirectory(prefix="staged-opaque-test-") as scratch:
