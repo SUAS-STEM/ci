@@ -1,0 +1,304 @@
+name: Encrypted MSVC build relay
+run-name: opaque-${{ inputs.nonce }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      nonce:
+        required: true
+        type: string
+      source_commit:
+        required: true
+        type: string
+      output_recipient:
+        required: true
+        type: string
+      source_bundle_sha256:
+        required: true
+        type: string
+      worker_bundle_sha256:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opaque-${{ inputs.nonce }}
+  cancel-in-progress: false
+
+jobs:
+  encrypted-msvc:
+    if: github.repository == 'SUAS-STEM/ci' && github.ref == 'refs/heads/main' && github.actor == 'eschan145' && github.event_name == 'workflow_dispatch'
+    name: opaque-windows-msvc
+    runs-on: windows-2022
+    timeout-minutes: 35
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      CI_NONCE: ${{ inputs.nonce }}
+      CI_PRIVATE_SHA: ${{ inputs.source_commit }}
+      CI_OUTPUT_RECIPIENT: ${{ inputs.output_recipient }}
+      CI_BUNDLE_SHA256: ${{ inputs.source_bundle_sha256 }}
+      CI_WORKER_SHA256: ${{ inputs.worker_bundle_sha256 }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Install pinned and checksum-verified age CLI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:CI_NONCE -cnotmatch '^[a-f0-9]{24}$' -or
+              $env:CI_PRIVATE_SHA -cnotmatch '^[a-f0-9]{40}$' -or
+              $env:CI_BUNDLE_SHA256 -cnotmatch '^[a-f0-9]{64}$' -or
+              $env:CI_WORKER_SHA256 -cnotmatch '^[a-f0-9]{64}$' -or
+              $env:CI_OUTPUT_RECIPIENT -cnotmatch '^age1[023456789acdefghjklmnpqrstuvwxyz]{58}$') {
+            throw 'Invalid reviewed encrypted MSVC dispatch metadata'
+          }
+          $uri = 'https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-windows-amd64.zip'
+          $checksum = 'f48d8f8f9ebe903ab5027ed067652f2cc1db94bc206976430133b905dcd8e8c7'
+          $archive = Join-Path $env:RUNNER_TEMP 'ci-pinned-age.zip'
+          Invoke-WebRequest -Uri $uri -OutFile $archive -MaximumRedirection 5
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $checksum) {
+            throw 'Untrusted pinned age archive'
+          }
+          $unzipped = Join-Path $env:RUNNER_TEMP 'ci-age-distribution'
+          [IO.Compression.ZipFile]::ExtractToDirectory($archive, $unzipped)
+          $target = Join-Path $env:GITHUB_WORKSPACE '.age-bin'
+          [IO.Directory]::CreateDirectory($target) | Out-Null
+          foreach ($name in @('age.exe','age-keygen.exe')) {
+            $matches = @(Get-ChildItem -LiteralPath $unzipped -Recurse -File | Where-Object Name -CEQ $name)
+            if ($matches.Count -ne 1 -or ($matches[0].Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw 'Unexpected pinned encryption executable layout'
+            }
+            [IO.File]::Copy($matches[0].FullName, (Join-Path $target $name), $false)
+          }
+          Remove-Item -LiteralPath $unzipped -Recurse -Force
+          Remove-Item -LiteralPath $archive -Force
+
+      - name: Publish GitHub-signed ephemeral public recipient
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nonce = $env:CI_NONCE
+          $tag = "ci-opaque-$nonce"
+          $work = Join-Path $env:RUNNER_TEMP $tag
+          [IO.Directory]::CreateDirectory($work) | Out-Null
+          $key = Join-Path $work 'recipient-key.txt'
+          $keygen = Join-Path $env:GITHUB_WORKSPACE '.age-bin/age-keygen.exe'
+          $output = (& $keygen -o $key 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0 -or $output -cnotmatch 'age1[023456789acdefghjklmnpqrstuvwxyz]{58}') {
+            throw 'Could not create ephemeral encryption recipient'
+          }
+          $workerRecipient = $Matches[0]
+          [IO.File]::WriteAllText((Join-Path $work 'recipient.agepub'), "$workerRecipient`n", [Text.Encoding]::ASCII)
+          $fields = [string[]]@('ci-opaque-v1', $nonce, $env:CI_PRIVATE_SHA,
+                               $env:CI_OUTPUT_RECIPIENT, $workerRecipient)
+          $digest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+                      [Text.Encoding]::ASCII.GetBytes([string]::Join([char]0, $fields)))).ToLowerInvariant()
+          $audience = "ci-opaque-v1:$digest"
+          $oidcUrl = [uri]$env:ACTIONS_ID_TOKEN_REQUEST_URL
+          if ($oidcUrl.Scheme -cne 'https' -or
+              -not $oidcUrl.Host.EndsWith('.actions.githubusercontent.com', [StringComparison]::Ordinal) -or
+              $oidcUrl.Port -ne 443 -or $oidcUrl.UserInfo -or $oidcUrl.Fragment -or
+              -not $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+            throw 'Signed GitHub worker identity unavailable'
+          }
+          $sep = if ($oidcUrl.Query) { '&' } else { '?' }
+          $proof = Invoke-RestMethod -Method Get -Uri (
+                     $oidcUrl.AbsoluteUri + $sep + 'audience=' + [uri]::EscapeDataString($audience)) -Headers @{
+                       Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+                     }
+          if ($proof.value -cnotmatch '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' -or
+              $proof.value.Length -gt 16000) {
+            throw 'Invalid ephemeral GitHub OIDC proof'
+          }
+          [IO.File]::WriteAllText((Join-Path $work 'recipient.oidc'), "$($proof.value)`n", [Text.Encoding]::ASCII)
+          & gh release upload $tag --repo SUAS-STEM/ci `
+             (Join-Path $work 'recipient.agepub') (Join-Path $work 'recipient.oidc')
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot publish signed ephemeral recipient' }
+          Write-Host 'Signed ephemeral encrypted worker recipient published'
+
+      - name: Verify and execute encrypted PRIVATE worker without GitHub credentials
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $remove = @('GH_TOKEN', 'GITHUB_TOKEN',
+                      'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL',
+                      'ACTIONS_RUNTIME_TOKEN','ACTIONS_RUNTIME_URL',
+                      'GITHUB_ENV','GITHUB_OUTPUT','GITHUB_PATH',
+                      'GITHUB_STEP_SUMMARY','GITHUB_STATE')
+          foreach ($name in $remove) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
+          $nonce = $env:CI_NONCE
+          $work = Join-Path $env:RUNNER_TEMP "ci-opaque-$nonce"
+          $workerCipher = Join-Path $env:RUNNER_TEMP "ci-private-worker-$nonce.age"
+          $workerZip = Join-Path $env:RUNNER_TEMP "ci-private-worker-$nonce.zip"
+          $age = Join-Path $env:GITHUB_WORKSPACE '.age-bin/age.exe'
+          $key = Join-Path $work 'recipient-key.txt'
+          $url = "https://github.com/SUAS-STEM/ci/releases/download/ci-opaque-$nonce/worker.age"
+          try {
+            $received = $false
+            for ($i = 0; $i -lt 150; $i++) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile $workerCipher -MaximumRedirection 5
+                $received = $true
+                break
+              } catch {
+                Remove-Item -LiteralPath $workerCipher -Force -ErrorAction SilentlyContinue
+                if ($i -eq 149) { throw 'Encrypted PRIVATE worker did not arrive' }
+                Start-Sleep -Seconds 4
+              }
+            }
+            if (-not $received -or (Get-Item -LiteralPath $workerCipher).Length -gt 1000000) {
+              throw 'Encrypted PRIVATE worker missing or oversized'
+            }
+            & $age -d -i $key -o $workerZip $workerCipher
+            if ($LASTEXITCODE -ne 0) { throw 'Private worker decryption failed' }
+            $workerHash = (Get-FileHash -LiteralPath $workerZip -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($workerHash -cne $env:CI_WORKER_SHA256) {
+              throw 'Encrypted worker does not match authenticated private coordinator commitment'
+            }
+            $zip = [IO.Compression.ZipFile]::OpenRead($workerZip)
+            try {
+              $names = @($zip.Entries | ForEach-Object FullName | Sort-Object)
+              $expected = @('manifest.json','tools/__init__.py',
+                            'tools/opaque_runner.py','tools/opaque_staged_runner.py') | Sort-Object
+              if (($names -join '|') -cne ($expected -join '|') -or
+                  @($zip.Entries | Where-Object { $_.Length -gt 200000 }).Count -ne 0) {
+                throw 'Unexpected private worker bundle contents'
+              }
+            } finally { $zip.Dispose() }
+            [IO.Compression.ZipFile]::ExtractToDirectory($workerZip, $env:GITHUB_WORKSPACE)
+            Remove-Item -LiteralPath $workerZip,$workerCipher -Force
+            Set-Location -LiteralPath $env:GITHUB_WORKSPACE
+            & python -m tools.opaque_staged_runner compile
+            if ($LASTEXITCODE -ne 0) { throw 'Encrypted private worker failed' }
+          } finally {
+            # Never allow private code to be imported after a token is returned
+            # to the later, trusted, workflow-owned ciphertext publisher.
+            Remove-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'tools') -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $workerZip,$workerCipher -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Publish only ciphertext and GitHub-signed build status
+        shell: pwsh
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # IMPORTANT: Never import or execute checkout scripts after the token
+        # comes back. This workflow-owned publisher uses only built-in PowerShell
+        # and GitHub HTTPS APIs; the prior token-free step verifies the checkout.
+        # A surviving same-user process remains an inherent hosted-runner risk.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            $nonce = $env:CI_NONCE
+            $privateSha = $env:CI_PRIVATE_SHA
+            $recipient = $env:CI_OUTPUT_RECIPIENT
+            if ($nonce -cnotmatch '^[a-f0-9]{24}$' -or
+                $privateSha -cnotmatch '^[a-f0-9]{40}$' -or
+                $recipient -cnotmatch '^age1[023456789acdefghjklmnpqrstuvwxyz]{58}$') {
+              throw 'Invalid encrypted result context'
+            }
+            $output = Join-Path $env:RUNNER_TEMP "ci-opaque-ciphertext-$nonce"
+            $statusFile = Join-Path $output 'result-status.json'
+            $status = Get-Content -LiteralPath $statusFile -Raw -ErrorAction Stop | ConvertFrom-Json
+            if ($status.nonce -cne $nonce -or
+                $status.source_commit -cne $privateSha -or
+                $status.exit_code -isnot [long] -and $status.exit_code -isnot [int] -or
+                $status.log_sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+                $status.binary_sha256 -cnotmatch '^[a-f0-9]{64}$') {
+              throw 'Invalid encrypted build status'
+            }
+            $workerRecipient = (Get-Content -LiteralPath (Join-Path $output 'recipient.agepub') -Raw).Trim()
+            if ($workerRecipient -cnotmatch '^age1[023456789acdefghjklmnpqrstuvwxyz]{58}$') {
+              throw 'Invalid ephemeral worker identity'
+            }
+            $files = @('result-log.age', 'result-status.age')
+            if ($status.exit_code -eq 0) { $files += 'result-exe.age' }
+            foreach ($name in $files) {
+              $item = Get-Item -LiteralPath (Join-Path $output $name) -ErrorAction Stop
+              if ($item.PSIsContainer -or
+                  ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                  $item.Length -lt 1 -or $item.Length -gt 100MB) {
+                throw 'Invalid encrypted result asset'
+              }
+            }
+            # This field order and NUL delimiter exactly match the PRIVATE
+            # coordinator's oidc_result_audience verification algorithm.
+            $audienceFields = @(
+              'ci-opaque-result-v1', $nonce, $privateSha, $recipient,
+              $workerRecipient, [string]$status.exit_code,
+              $status.log_sha256, $status.binary_sha256
+            )
+            $audienceBytes = [Text.Encoding]::ASCII.GetBytes(
+              [string]::Join([char]0, [string[]]$audienceFields))
+            $audienceHash = [Convert]::ToHexString(
+              [Security.Cryptography.SHA256]::HashData($audienceBytes)).ToLowerInvariant()
+            $audience = "ci-opaque-result-v1:$audienceHash"
+            # Restrict the OIDC request to GitHub's issuance endpoint.
+            $oidcUrl = [uri]$env:ACTIONS_ID_TOKEN_REQUEST_URL
+            if ($oidcUrl.Scheme -cne 'https' -or
+                -not $oidcUrl.Host.EndsWith('.actions.githubusercontent.com', [StringComparison]::Ordinal) -or
+                $oidcUrl.Port -ne 443 -or $oidcUrl.UserInfo -or $oidcUrl.Fragment -or
+                -not $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+              throw 'OIDC runner identity unavailable'
+            }
+            $separator = if ($oidcUrl.Query) { '&' } else { '?' }
+            $proofResponse = Invoke-RestMethod -Method Get -Uri (
+              $oidcUrl.AbsoluteUri + $separator + 'audience=' + [uri]::EscapeDataString($audience)
+            ) -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" }
+            if ($proofResponse.value -cnotmatch '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' -or
+                $proofResponse.value.Length -gt 16000) {
+              throw 'Missing GitHub-signed result identity'
+            }
+            $proofPath = Join-Path $output 'result.oidc'
+            [IO.File]::WriteAllText($proofPath, "$($proofResponse.value)`n",
+              [Text.Encoding]::ASCII)
+            $files += 'result.oidc'
+            # Upload ciphertext only. Use NO executable from the checkout,
+            # its writable .age-bin, the build directory, or the system PATH.
+            $headers = @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept = 'application/vnd.github+json'
+              'X-GitHub-Api-Version' = '2022-11-28'
+              'User-Agent' = 'ci/opaque-msvc'
+            }
+            $tag = "ci-opaque-$nonce"
+            $release = Invoke-RestMethod -Method Get -Headers $headers -Uri (
+              "https://api.github.com/repos/SUAS-STEM/ci/releases/tags/$tag")
+            if ($release.tag_name -cne $tag -or $release.draft -ne $false -or
+                $release.prerelease -ne $true) {
+              throw 'Unexpected encrypted transfer release'
+            }
+            foreach ($name in $files) {
+              if (@($release.assets | Where-Object { $_.name -ceq $name }).Count -ne 0) {
+                throw 'Duplicate encrypted result asset'
+              }
+              $address = "https://uploads.github.com/repos/SUAS-STEM/ci/releases/$($release.id)/assets?name=$name"
+              $asset = Invoke-RestMethod -Method Post -Headers $headers -Uri $address -InFile (
+                Join-Path $output $name) -ContentType 'application/octet-stream'
+              if ($asset.name -cne $name -or $asset.state -cne 'uploaded') {
+                throw 'Encrypted result upload not confirmed'
+              }
+            }
+            Remove-Item -LiteralPath $output -Recurse -Force
+            Write-Host 'Encrypted authenticated MSVC results published'
+            if ($status.exit_code -ne 0) { throw 'Encrypted MSVC result reports failure' }
+          } catch {
+            # Never leak decrypted compiler diagnostics or internal paths.
+            [Console]::Error.WriteLine('Encrypted result publication failed')
+            exit 1
+          }
+      # Source, worker, build.ps1, and outputs travel only as ciphertext.
+      # Source, worker, build.ps1, and outputs travel only as ciphertext.
+      # Source, build.ps1, binaries, and captured diagnostics are transferred
+      # as encrypted files inside a short-lived PUBLIC prerelease.
+      # The entire compile phase, including transport Python, runs WITHOUT
+      # a GitHub token. Only bootstrap and publish use PUBLIC-only write
+      # credentials, and plaintext workspace/key deletion precedes publish.
+      # GitHub-hosted runner privileged operators still remain trusted.
+      # This workflow never uploads Actions artifacts, and it never receives
+      # credentials for the private source repository or private Release.
