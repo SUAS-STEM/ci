@@ -57,7 +57,7 @@ It refuses changes to release ownership, asset digests and expected filenames,
 and skips an active public runner. It never accesses private source, artifacts,
 or credentials. This is a best-effort recovery measure, not a guarantee of
 immediate deletion after a catastrophic coordinator failure.
-The successful current synthetic proof is public Actions run #38506746075;
+The successful current synthetic proof is public Actions run #38674511480;
 its binary and diagnostic log are retained in the private Release.
 
 The revised three-step public workflow publishes its signed ephemeral public
@@ -81,16 +81,18 @@ one-time private key before a final step uploads encrypted results using the
 PUBLIC token. This reduces direct token exposure but **does not provide an OS
 isolation boundary** against malicious source or scripts. The staged version
 has passed local tests **and** a real hosted Windows/MSVC build, public run
-#38506746075, which returned signed encrypted output to verified private
-Release `opaque-ci-38506746075`. It remains experimental and is not approved
+#38674511480, which returned signed encrypted output to verified private
+Release `opaque-ci-38674511480`. It remains experimental and is not approved
 for confidential production source. The small private GitHub Actions caller
 has an on-demand, memory-capped Pi Docker runner implementation and a
 successful separate runner smoke test, but has not completed a full relay run.
 Incremental ciphertext log streaming passed a prior public hosted test
 (#38600642017), but the **current tokenless compile stage** intentionally
 returns compiler output only after completion. The final GitHub-signed log hash
-remains authoritative. This latest hardening revision has local coverage but
-has not yet received a new hosted Windows execution.
+remains authoritative. This latest token-free revision was validated in
+hosted public Windows/MSVC run #38674511480, including checks that the public
+log contained no synthetic private output marker and created zero Actions
+artifacts. The private GitHub Actions coordinator is still not enabled.
 
 - The original public fixture uses a read-only `GITHUB_TOKEN`. The separate encrypted MSVC worker has **public-repository** `contents:write` permission to exchange short-lived encrypted prerelease assets; it does not receive any PRIVATE source or Release repository credential. This is a narrower trust boundary, not an isolated enclave. A dedicated repository-scoped GitHub App token should replace the Pi's broad personal token for unattended orchestration.
 - Source confidentiality cannot be achieved if proprietary GCS code is built on a public GitHub-hosted runner, even if GitHub Release publication is private. Use a trusted private execution environment for such builds.

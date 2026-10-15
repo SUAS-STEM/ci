@@ -41,6 +41,21 @@ The above run was a **one-time feature-branch proof**. Its temporary push-trigge
 
 ### Experimental related-project encrypted Windows/MSVC relay
 
+**Latest complete token-free compile proof (October 14, 2026):**
+[PUBLIC Windows/MSVC run #38674511480](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38674511480)
+completed successfully with CMake and CTest. This version separately
+publishes a GitHub-signed ephemeral public recipient, executes the decrypted
+synthetic `.ps1`/MSVC build **without a repository token**, and publishes only
+encrypted results and a signed status afterward. The [PRIVATE Release
+`opaque-ci-38674511480`](https://github.com/SUAS-STEM/ci-private-build-lab/releases/tag/opaque-ci-38674511480)
+was verified and mirrored to the Pi, then reverified without overwriting.
+The public log privacy test and **zero Actions-artifacts** check passed; the
+temporary ciphertext prerelease and one-off workflow were removed. The new
+streaming executable encryption avoids reading the whole `.exe` into RAM.
+**This was Pi-coordinated, not a completed PRIVATE GitHub Actions job.**
+The public `main` branch remains protected and the permanent workflow is not
+yet deployed.
+
 `secure-opaque-build.yml` is a **separate** protocol: a lightweight private
 coordinator dispatches this PUBLIC repository's Windows/MSVC runner to compile
 an encrypted source bundle and private PowerShell build script. The worker
@@ -82,11 +97,11 @@ that merely reuse the published nonce and private commit SHA. The salt is
 inside the encrypted ZIP, not an Actions workflow input. This protection is
 only as strong as the reviewed workflow and its runner execution.
 
-The latest real public `windows-2022` MSVC run
-[38600642017](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38600642017)
+The latest verified public `windows-2022` MSVC run
+[38674511480](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38674511480)
 succeeded using **only synthetic** source and `.ps1` from the isolated private
 [staging repository](https://github.com/SUAS-STEM/ci-private-build-lab). The
-return output is in [PRIVATE Release `opaque-ci-38600642017`](https://github.com/SUAS-STEM/ci-private-build-lab/releases/tag/opaque-ci-38600642017).
+return output is in [PRIVATE Release `opaque-ci-38674511480`](https://github.com/SUAS-STEM/ci-private-build-lab/releases/tag/opaque-ci-38674511480).
 This newer proof also checked the **salted archive hash before unpacking**,
 authenticated both the input key and result hashes using GitHub-signed OIDC,
 and confirmed the private MSVC diagnostics were returned byte-for-byte.
@@ -94,9 +109,12 @@ The public job logs were checked for private synthetic markers and executable
 paths (neither appeared); its Actions artifact inventory was zero. The Pi
 verified the private Release and saved an owner-only archive. The short-lived
 public prerelease and one-time branch test workflow were removed afterward.
-This run also successfully exercised encrypted incremental compiler-log
-delivery on a real hosted Windows runner (1,346 decrypted log bytes) with a
-separate final GitHub-signed whole-log integrity check.
+This run verified the current **token-free compile phase**, with 1,346
+decrypted compiler-log bytes returned **only after** a signed whole-log
+integrity check. The private Pi archive was reverified using
+`tools/relay_exposure_audit.py` from the staging repository. The prior
+encrypted incremental-log prototype was separately exercised in
+[run #38600642017](https://github.com/SUAS-STEM/ci-relay-lab/actions/runs/38600642017).
 
 For token isolation, the Windows worker uses three phases: **publish a signed
 ephemeral recipient** (public Release token), **decrypt and compile** (without
@@ -108,8 +126,8 @@ plaintext workspace and one-time private key before the upload phase. The
 launcher also removes job-scoped OIDC request credentials and GitHub Actions
 control-file paths before starting Python. This is not isolation from the
 GitHub-hosted runner infrastructure. This
-three-phase execution, including both signed proofs, was verified in real
-Windows run #38506746075. The **separate PRIVATE GitHub Actions full relay
+three-phase execution, including both signed proofs, was verified again in real
+Windows run #38674511480. The **separate PRIVATE GitHub Actions full relay
 job has not run** because the dedicated scoped runner credential and approved
 public-main workflow are not yet configured. A small ephemeral Pi Docker
 self-hosted runner has passed a separate smoke test; the Pi performed the
@@ -124,8 +142,11 @@ the build phase**. Instead, it buffers the combined compiler-output bytes on
 the runner, encrypts them, deletes plaintext/key material, and returns the
 complete verbatim log in the final publishing phase. The private coordinator
 then validates the GitHub-signed whole-log SHA-256 before accepting it.
-This safer revision passed local tests but has **not yet run on a hosted
-Windows runner**; the prior streaming run validates the earlier revision.
+This safer revision passed local tests and the **October 14 real hosted
+Windows/MSVC run #38674511480**, including private log, executable, source
+commit, OIDC result and Pi-mirror verification. Its public Actions-artifact
+count was zero. This does not verify the not-yet-enabled private GitHub Actions
+coordinator or provide confidential computing against runner operators.
 
 ### Automatic cleanup after coordinator interruptions
 
