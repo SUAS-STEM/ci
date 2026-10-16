@@ -1,9 +1,14 @@
-name: Encrypted MSVC build relay
+name: Encrypted Windows or Linux build relay
 run-name: opaque-${{ inputs.nonce }}
 
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        required: false
+        type: choice
+        default: windows
+        options: [windows, linux]
       nonce:
         required: true
         type: string
@@ -29,9 +34,9 @@ concurrency:
 
 jobs:
   encrypted-msvc:
-    if: github.repository == 'SUAS-STEM/ci' && github.ref == 'refs/heads/main' && github.actor == 'eschan145' && github.event_name == 'workflow_dispatch'
-    name: opaque-windows-msvc
-    runs-on: windows-2022
+    if: github.repository == 'SUAS-STEM/ci' && github.ref == 'refs/heads/main' && github.actor == 'eschan145' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["windows","linux"]'), inputs.platform)
+    name: opaque-${{ inputs.platform }}
+    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || 'windows-2022' }}
     timeout-minutes: 35
     permissions:
       contents: write
@@ -43,6 +48,7 @@ jobs:
       CI_BUNDLE_SHA256: ${{ inputs.source_bundle_sha256 }}
       CI_WORKER_SHA256: ${{ inputs.worker_bundle_sha256 }}
       PYTHONDONTWRITEBYTECODE: '1'
+      CI_PLATFORM: ${{ inputs.platform }}
     steps:
       - name: Install pinned and checksum-verified age CLI
         shell: pwsh
@@ -55,23 +61,45 @@ jobs:
               $env:CI_OUTPUT_RECIPIENT -cnotmatch '^age1[023456789acdefghjklmnpqrstuvwxyz]{58}$') {
             throw 'Invalid reviewed encrypted MSVC dispatch metadata'
           }
-          $uri = 'https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-windows-amd64.zip'
-          $checksum = 'f48d8f8f9ebe903ab5027ed067652f2cc1db94bc206976430133b905dcd8e8c7'
-          $archive = Join-Path $env:RUNNER_TEMP 'ci-pinned-age.zip'
+          if (($env:CI_PLATFORM -ceq 'windows' -and $env:RUNNER_OS -cne 'Windows') -or
+              ($env:CI_PLATFORM -ceq 'linux' -and $env:RUNNER_OS -cne 'Linux') -or
+              $env:CI_PLATFORM -cnotmatch '^(windows|linux)$') {
+            throw 'Encrypted runner operating system does not match reviewed dispatch'
+          }
+          if ($env:CI_PLATFORM -ceq 'linux') {
+            $uri = 'https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz'
+            $checksum = 'cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10'
+            $archive = Join-Path $env:RUNNER_TEMP 'ci-pinned-age.tar.gz'
+          } else {
+            $uri = 'https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-windows-amd64.zip'
+            $checksum = 'f48d8f8f9ebe903ab5027ed067652f2cc1db94bc206976430133b905dcd8e8c7'
+            $archive = Join-Path $env:RUNNER_TEMP 'ci-pinned-age.zip'
+          }
           Invoke-WebRequest -Uri $uri -OutFile $archive -MaximumRedirection 5
           if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $checksum) {
             throw 'Untrusted pinned age archive'
           }
           $unzipped = Join-Path $env:RUNNER_TEMP 'ci-age-distribution'
-          [IO.Compression.ZipFile]::ExtractToDirectory($archive, $unzipped)
+          [IO.Directory]::CreateDirectory($unzipped) | Out-Null
+          if ($env:CI_PLATFORM -ceq 'linux') {
+            & tar -xzf $archive -C $unzipped
+            if ($LASTEXITCODE -ne 0) { throw 'Pinned Linux age archive extraction failed' }
+          } else {
+            [IO.Compression.ZipFile]::ExtractToDirectory($archive, $unzipped)
+          }
           $target = Join-Path $env:GITHUB_WORKSPACE '.age-bin'
           [IO.Directory]::CreateDirectory($target) | Out-Null
-          foreach ($name in @('age.exe','age-keygen.exe')) {
+          $names = if ($env:CI_PLATFORM -ceq 'linux') { @('age','age-keygen') } else { @('age.exe','age-keygen.exe') }
+          foreach ($name in $names) {
             $matches = @(Get-ChildItem -LiteralPath $unzipped -Recurse -File | Where-Object Name -CEQ $name)
             if ($matches.Count -ne 1 -or ($matches[0].Attributes -band [IO.FileAttributes]::ReparsePoint)) {
               throw 'Unexpected pinned encryption executable layout'
             }
             [IO.File]::Copy($matches[0].FullName, (Join-Path $target $name), $false)
+            if ($env:CI_PLATFORM -ceq 'linux') {
+              & chmod 700 (Join-Path $target $name)
+              if ($LASTEXITCODE -ne 0) { throw 'Pinned Linux age executable permission failed' }
+            }
           }
           Remove-Item -LiteralPath $unzipped -Recurse -Force
           Remove-Item -LiteralPath $archive -Force
@@ -87,7 +115,7 @@ jobs:
           $work = Join-Path $env:RUNNER_TEMP $tag
           [IO.Directory]::CreateDirectory($work) | Out-Null
           $key = Join-Path $work 'recipient-key.txt'
-          $keygen = Join-Path $env:GITHUB_WORKSPACE '.age-bin/age-keygen.exe'
+          $keygen = Join-Path $env:GITHUB_WORKSPACE $(if ($env:CI_PLATFORM -ceq 'linux') { '.age-bin/age-keygen' } else { '.age-bin/age-keygen.exe' })
           $output = (& $keygen -o $key 2>&1 | Out-String)
           if ($LASTEXITCODE -ne 0 -or $output -cnotmatch 'age1[023456789acdefghjklmnpqrstuvwxyz]{58}') {
             throw 'Could not create ephemeral encryption recipient'
@@ -135,7 +163,7 @@ jobs:
           $work = Join-Path $env:RUNNER_TEMP "ci-opaque-$nonce"
           $workerCipher = Join-Path $env:RUNNER_TEMP "ci-private-worker-$nonce.age"
           $workerZip = Join-Path $env:RUNNER_TEMP "ci-private-worker-$nonce.zip"
-          $age = Join-Path $env:GITHUB_WORKSPACE '.age-bin/age.exe'
+          $age = Join-Path $env:GITHUB_WORKSPACE $(if ($env:CI_PLATFORM -ceq 'linux') { '.age-bin/age' } else { '.age-bin/age.exe' })
           $key = Join-Path $work 'recipient-key.txt'
           $url = "https://github.com/SUAS-STEM/ci/releases/download/ci-opaque-$nonce/worker.age"
           try {
@@ -173,7 +201,8 @@ jobs:
             [IO.Compression.ZipFile]::ExtractToDirectory($workerZip, $env:GITHUB_WORKSPACE)
             Remove-Item -LiteralPath $workerZip,$workerCipher -Force
             Set-Location -LiteralPath $env:GITHUB_WORKSPACE
-            & python -m tools.opaque_staged_runner compile
+            $python = if ($env:CI_PLATFORM -ceq 'linux') { 'python3' } else { 'python' }
+            & $python -m tools.opaque_staged_runner compile
             if ($LASTEXITCODE -ne 0) { throw 'Encrypted private worker failed' }
           } finally {
             # Never allow private code to be imported after a token is returned
